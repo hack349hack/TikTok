@@ -51,13 +51,16 @@ class AddSoundStates(StatesGroup):
 
 # === КЛАВИАТУРЫ ===
 def get_main_keyboard():
-    kb = InlineKeyboardMarkup(inline_keyboard=[])
-    kb.add(
-        InlineKeyboardButton(text="➕ Добавить звук", callback_data="add_sound"),
-        InlineKeyboardButton(
-            text="📃 Список звуков",
-            callback_data="list_sounds" if SOUND_URLS else "no_sounds"
-        )
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="➕ Добавить звук", callback_data="add_sound"),
+                InlineKeyboardButton(
+                    text="📃 Список звуков",
+                    callback_data="list_sounds" if SOUND_URLS else "no_sounds"
+                )
+            ]
+        ]
     )
     return kb
 
@@ -68,10 +71,10 @@ def build_sounds_keyboard(page: int = 0):
     if not sounds_page:
         return None
 
-    keyboard_rows = []
+    inline_keyboard = []
 
     for i, sound in enumerate(sounds_page, start=start):
-        row = [
+        inline_keyboard.append([
             InlineKeyboardButton(
                 text=f"🗑 {sound.get('name') or 'Без имени'}",
                 callback_data=f"remove_sound_{i}"
@@ -80,18 +83,18 @@ def build_sounds_keyboard(page: int = 0):
                 text=f"✏️ {sound.get('name') or 'Без имени'}",
                 callback_data=f"rename_sound_{i}"
             )
-        ]
-        keyboard_rows.append(row)
+        ])
 
+    # Навигация по страницам
     nav_buttons = []
     if start > 0:
         nav_buttons.append(InlineKeyboardButton(text='⬅️ Назад', callback_data=f'page_{page-1}'))
     if end < len(SOUND_URLS):
         nav_buttons.append(InlineKeyboardButton(text='➡️ Вперёд', callback_data=f'page_{page+1}'))
     if nav_buttons:
-        keyboard_rows.append(nav_buttons)
+        inline_keyboard.append(nav_buttons)
 
-    return InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
 # === ПРОВЕРКА НОВЫХ ВИДЕО ===
 async def check_new_videos():
@@ -122,11 +125,15 @@ async def check_new_videos():
                             except:
                                 thumbnail_url = None
 
-                            keyboard_inline = InlineKeyboardMarkup(inline_keyboard=[
-                                [InlineKeyboardButton(text="▶️ Открыть в TikTok", url=video_url)],
-                                [InlineKeyboardButton(text="🗑 Удалить звук", callback_data=f"remove_sound_{idx}"),
-                                 InlineKeyboardButton(text="✏️ Переименовать звук", callback_data=f"rename_sound_{idx}")]
-                            ])
+                            keyboard_inline = InlineKeyboardMarkup(
+                                inline_keyboard=[
+                                    [InlineKeyboardButton(text="▶️ Открыть в TikTok", url=video_url)],
+                                    [
+                                        InlineKeyboardButton(text="🗑 Удалить звук", callback_data=f"remove_sound_{idx}"),
+                                        InlineKeyboardButton(text="✏️ Переименовать звук", callback_data=f"rename_sound_{idx}")
+                                    ]
+                                ]
+                            )
 
                             caption_text = f"🆕 Новый ролик под звуком: {sound_name}"
 
