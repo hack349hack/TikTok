@@ -11,7 +11,7 @@ import os
 import json
 
 # === НАСТРОЙКИ ===
-TOKEN = os.getenv("TOKEN", "8098428478:AAGJJKaREHjQgGPFudgyH1pc_UzzqJUrcgE")
+TOKEN = os.getenv("TOKEN")
 CHECK_INTERVAL = 300
 HISTORY_FILE = 'seen_videos.json'
 SOUNDS_FILE = 'sounds.json'
