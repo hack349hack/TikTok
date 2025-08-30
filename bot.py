@@ -5,20 +5,19 @@ from aiogram import Bot, Dispatcher
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.filters import Command
 from aiogram.fsm.state import StatesGroup, State
-from aiogram.fsm.storage.json import JSONStorage
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.context import FSMContext
 import os
 import json
 
 # === НАСТРОЙКИ ===
-TOKEN = os.getenv("TOKEN")
+TOKEN = os.getenv("TOKEN")  # берем токен из переменных Render
 CHECK_INTERVAL = 300
 HISTORY_FILE = 'seen_videos.json'
 SOUNDS_FILE = 'sounds.json'
 SOUNDS_PER_PAGE = 5
 
-# JSON-хранилище FSM
-storage = JSONStorage(path="fsm_storage.json")
+storage = MemoryStorage()
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=storage)
 
@@ -69,7 +68,6 @@ async def check_new_videos():
             sound_name = sound.get('name') or f'#{idx+1}'
             try:
                 r = requests.get(sound_url, headers={"User-Agent": "Mozilla/5.0"})
-                # Для упрощения можно парсить ссылки с "/video/"
                 soup = BeautifulSoup(r.text, "html.parser")
                 video_elements = soup.find_all("a", href=True)
                 for a in video_elements:
@@ -115,7 +113,7 @@ async def start_cmd(message: Message):
     OWNER_ID = message.chat.id
     await message.answer("✅ Бот запущен!", reply_markup=get_main_keyboard())
 
-# === FSM: ДОБАВЛЕНИЕ ЗВУКА (INLINE) ===
+# === FSM: ДОБАВЛЕНИЕ ЗВУКА ===
 @dp.callback_query(lambda c: c.data == "add_sound")
 async def inline_add_sound(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer("🔗 Пришли ссылку на звук TikTok:")
@@ -134,7 +132,6 @@ async def add_sound_get_name(message: Message, state: FSMContext):
     url = data['url']
     name = message.text if message.text.lower() != 'нет' else None
     SOUND_URLS.append({'url': url, 'name': name})
-    # Сохраняем историю звуков
     with open(SOUNDS_FILE, 'w') as f:
         json.dump(SOUND_URLS, f)
     await message.answer(f"✅ Звук добавлен: {name or url}", reply_markup=get_main_keyboard())
