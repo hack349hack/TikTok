@@ -1,15 +1,20 @@
-# Python
+# Python cache
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-env/
+
+# Virtual environments
 .venv/
 venv/
-*.sqlite3
+env/
 
 # Secrets / конфигурации
-*.env
+.env
 fsm_storage.json
 sounds.json
 seen_videos.json
+
+# OS files
+.DS_Store
+Thumbs.db
