@@ -9,10 +9,14 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.context import FSMContext
 import os
 import json
+from dotenv import load_dotenv
+
+# === ЗАГРУЗКА .env ===
+load_dotenv()
+TOKEN = os.getenv("TOKEN")
+CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 300))
 
 # === НАСТРОЙКИ ===
-TOKEN = os.getenv("TOKEN")  # TOKEN из переменных Render
-CHECK_INTERVAL = 300
 HISTORY_FILE = 'seen_videos.json'
 SOUNDS_FILE = 'sounds.json'
 SOUNDS_PER_PAGE = 5
@@ -42,14 +46,14 @@ if os.path.exists(SOUNDS_FILE):
         except:
             SOUND_URLS = []
 
-# === FSM СОСТОЯНИЯ ДЛЯ ДОБАВЛЕНИЯ ЗВУКА ===
+# === FSM СОСТОЯНИЯ ===
 class AddSoundStates(StatesGroup):
     waiting_for_url = State()
     waiting_for_name = State()
 
-# === ДИНАМИЧЕСКАЯ INLINE КЛАВИАТУРА ===
+# === КЛАВИАТУРЫ ===
 def get_main_keyboard():
-    kb = InlineKeyboardMarkup(row_width=2)
+    kb = InlineKeyboardMarkup(inline_keyboard=[])
     kb.add(
         InlineKeyboardButton(text="➕ Добавить звук", callback_data="add_sound"),
         InlineKeyboardButton(
@@ -68,7 +72,6 @@ def build_sounds_keyboard(page: int = 0):
 
     keyboard_rows = []
 
-    # Кнопки для каждого звука
     for i, sound in enumerate(sounds_page, start=start):
         row = [
             InlineKeyboardButton(
@@ -82,7 +85,6 @@ def build_sounds_keyboard(page: int = 0):
         ]
         keyboard_rows.append(row)
 
-    # Навигация
     nav_buttons = []
     if start > 0:
         nav_buttons.append(InlineKeyboardButton(text='⬅️ Назад', callback_data=f'page_{page-1}'))
@@ -114,7 +116,6 @@ async def check_new_videos():
                             with open(HISTORY_FILE, 'w') as f:
                                 json.dump(seen_videos, f)
 
-                            # Миниатюра видео
                             try:
                                 r_video = requests.get(video_url, headers={"User-Agent": "Mozilla/5.0"})
                                 soup_video = BeautifulSoup(r_video.text, "html.parser")
@@ -147,7 +148,7 @@ async def start_cmd(message: Message):
     OWNER_ID = message.chat.id
     await message.answer("✅ Бот запущен!", reply_markup=get_main_keyboard())
 
-# === FSM: ДОБАВЛЕНИЕ ЗВУКА ===
+# === ДОБАВЛЕНИЕ ЗВУКА ===
 @dp.callback_query(lambda c: c.data == "add_sound")
 async def inline_add_sound(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer("🔗 Пришли ссылку на звук TikTok:")
@@ -171,7 +172,7 @@ async def add_sound_get_name(message: Message, state: FSMContext):
     await message.answer(f"✅ Звук добавлен: {name or url}", reply_markup=get_main_keyboard())
     await state.clear()
 
-# === INLINE: СПИСОК ЗВУКОВ ===
+# === СПИСОК ЗВУКОВ ===
 @dp.callback_query(lambda c: c.data == "list_sounds")
 async def inline_list_sounds(callback: CallbackQuery):
     kb = build_sounds_keyboard(page=0)
@@ -187,7 +188,7 @@ async def inline_list_sounds(callback: CallbackQuery):
 async def inline_no_sounds(callback: CallbackQuery):
     await callback.answer("❌ Звуков пока нет", show_alert=True)
 
-# === CALLBACK QUERY: ПАГИНАЦИЯ, УДАЛЕНИЕ, ПЕРЕИМЕНОВАНИЕ ===
+# === CALLBACK: пагинация, удаление, переименование ===
 @dp.callback_query(lambda c: c.data.startswith('page_'))
 async def callback_page(callback: CallbackQuery):
     page = int(callback.data.split('_')[1])
