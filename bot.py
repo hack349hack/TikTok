@@ -41,7 +41,7 @@ if os.path.exists(SOUNDS_FILE):
 # === КЛАВИАТУРА ===
 keyboard = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton('➕ Добавить звук'), KeyboardButton('📃 Список звуков')]
+        [KeyboardButton(text='➕ Добавить звук'), KeyboardButton(text='📃 Список звуков')]
     ],
     resize_keyboard=True
 )
