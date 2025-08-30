@@ -2,7 +2,7 @@ import asyncio import requests from bs4 import BeautifulSoup from datetime impor
 
 === НАСТРОЙКИ ===
 
-TOKEN = os.getenv("TOKEN", "8098428478:AAGJJKaREHjQgGPFudgyH1pc_UzzqJUrcgE") CHECK_INTERVAL = 300  # как часто проверять (секунд) HISTORY_FILE = 'seen_videos.json' SOUNDS_FILE = 'sounds.json' SOUNDS_PER_PAGE = 5  # количество звуков на странице
+TOKEN = os.getenv("TOKEN") CHECK_INTERVAL = 300  # как часто проверять (секунд) HISTORY_FILE = 'seen_videos.json' SOUNDS_FILE = 'sounds.json' SOUNDS_PER_PAGE = 5  # количество звуков на странице
 
 bot = Bot(token=TOKEN) dp = Dispatcher()
 
