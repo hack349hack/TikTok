@@ -2,23 +2,27 @@ import asyncio import requests from bs4 import BeautifulSoup from datetime impor
 
 === НАСТРОЙКИ ===
 
-TOKEN = os.getenv("TOKEN", "8098428478:AAGJJKaREHjQgGPFudgyH1pc_UzzqJUrcgE")  # можно оставить токен напрямую CHECK_INTERVAL = 300  # как часто проверять (секунд) HISTORY_FILE = 'seen_videos.json'
+TOKEN = os.getenv("TOKEN", "8098428478:AAGJJKaREHjQgGPFudgyH1pc_UzzqJUrcgE") CHECK_INTERVAL = 300  # как часто проверять (секунд) HISTORY_FILE = 'seen_videos.json' SOUNDS_FILE = 'sounds.json' SOUNDS_PER_PAGE = 5  # количество звуков на странице
 
 bot = Bot(token=TOKEN) dp = Dispatcher()
 
 Храним данные
 
-seen_videos = set() SOUND_URL = None OWNER_ID = None
+seen_videos = {} SOUND_URLS = []  # список словарей: [{'url':..., 'name':...}] OWNER_ID = None rename_state = {}
 
 Загрузка истории
 
-if os.path.exists(HISTORY_FILE): with open(HISTORY_FILE, 'r') as f: try: seen_videos = set(json.load(f)) except: seen_videos = set()
+if os.path.exists(HISTORY_FILE): with open(HISTORY_FILE, 'r') as f: try: seen_videos = json.load(f) except: seen_videos = {}
+
+Загрузка звуков
+
+if os.path.exists(SOUNDS_FILE): with open(SOUNDS_FILE, 'r') as f: try: SOUND_URLS = json.load(f) except: SOUND_URLS = []
 
 Клавиатура
 
-keyboard = ReplyKeyboardMarkup( keyboard=[ [KeyboardButton('Установить звук'), KeyboardButton('Удалить звук')], [KeyboardButton('Проверить звук')] ], resize_keyboard=True )
+keyboard = ReplyKeyboardMarkup( keyboard=[ [KeyboardButton('➕ Добавить звук'), KeyboardButton('📃 Список звуков')] ], resize_keyboard=True )
 
-async def check_new_videos(): global seen_videos, SOUND_URL while True: if SOUND_URL: try: r = requests.get(SOUND_URL, headers={"User-Agent": "Mozilla/5.0"}) soup = BeautifulSoup(r.text, "html.parser")
+async def check_new_videos(): global seen_videos, SOUND_URLS while True: for idx, sound in enumerate(SOUND_URLS): sound_url = sound['url'] sound_name = sound.get('name') or f'#{idx+1}' try: r = requests.get(sound_url, headers={"User-Agent": "Mozilla/5.0"}) soup = BeautifulSoup(r.text, "html.parser")
 
 video_elements = soup.find_all("a", href=True)
             for a in video_elements:
@@ -30,12 +34,15 @@ video_elements = soup.find_all("a", href=True)
                     except:
                         video_time = datetime.now()
 
-                    if video_url not in seen_videos and video_time > datetime.now() - timedelta(days=1):
-                        seen_videos.add(video_url)
-                        with open(HISTORY_FILE, 'w') as f:
-                            json.dump(list(seen_videos), f)
+                    if sound_url not in seen_videos:
+                        seen_videos[sound_url] = []
 
-                        # Получаем миниатюру видео
+                    if video_url not in seen_videos[sound_url] and video_time > datetime.now() - timedelta(days=1):
+                        seen_videos[sound_url].append(video_url)
+                        with open(HISTORY_FILE, 'w') as f:
+                            json.dump(seen_videos, f)
+
+                        # Миниатюра видео
                         try:
                             r_video = requests.get(video_url, headers={"User-Agent": "Mozilla/5.0"})
                             soup_video = BeautifulSoup(r_video.text, "html.parser")
@@ -44,27 +51,20 @@ video_elements = soup.find_all("a", href=True)
                         except:
                             thumbnail_url = None
 
-                        # Кнопки: открыть видео и удалить звук
                         keyboard_inline = InlineKeyboardMarkup(
                             inline_keyboard=[
                                 [InlineKeyboardButton(text="▶️ Открыть в TikTok", url=video_url)],
-                                [InlineKeyboardButton(text="🗑 Удалить звук", callback_data="remove_sound")]
+                                [InlineKeyboardButton(text="🗑 Удалить звук", callback_data=f"remove_sound_{idx}"),
+                                 InlineKeyboardButton(text="✏️ Переименовать звук", callback_data=f"rename_sound_{idx}")]
                             ]
                         )
 
+                        caption_text = f"🆕 Новый ролик под звуком: {sound_name}"
+
                         if thumbnail_url:
-                            await bot.send_photo(
-                                chat_id=OWNER_ID,
-                                photo=thumbnail_url,
-                                caption="🆕 Новый ролик под твой звук!",
-                                reply_markup=keyboard_inline
-                            )
+                            await bot.send_photo(chat_id=OWNER_ID, photo=thumbnail_url, caption=caption_text, reply_markup=keyboard_inline)
                         else:
-                            await bot.send_message(
-                                chat_id=OWNER_ID,
-                                text="🆕 Новый ролик под твой звук!",
-                                reply_markup=keyboard_inline
-                            )
+                            await bot.send_message(chat_id=OWNER_ID, text=caption_text, reply_markup=keyboard_inline)
 
         except Exception as e:
             print("Ошибка:", e)
@@ -73,13 +73,45 @@ video_elements = soup.find_all("a", href=True)
 
 @dp.message(Command("start")) async def start_cmd(message: Message): global OWNER_ID OWNER_ID = message.chat.id await message.answer("✅ Бот запущен!", reply_markup=keyboard)
 
-@dp.message(Command("set_sound")) async def set_sound_cmd(message: Message): global SOUND_URL, seen_videos parts = message.text.split() if len(parts) == 2: SOUND_URL = parts[1] seen_videos = set()  # сброс предыдущих видео with open(HISTORY_FILE, 'w') as f: json.dump(list(seen_videos), f) await message.answer(f"✅ Звук установлен: {SOUND_URL}") else: await message.answer("❌ Использование: /set_sound <ссылка на звук>")
+@dp.message(Command("add_sound")) async def add_sound_cmd(message: Message): global SOUND_URLS parts = message.text.split(maxsplit=2) if len(parts) >= 2: url = parts[1] name = parts[2] if len(parts) == 3 else None SOUND_URLS.append({'url': url, 'name': name}) with open(SOUNDS_FILE, 'w') as f: json.dump(SOUND_URLS, f) await message.answer(f"✅ Звук добавлен: {name or url}") else: await message.answer("❌ Использование: /add_sound <ссылка> [название]")
 
-@dp.message(Command("remove_sound")) async def remove_sound_cmd(message: Message): global SOUND_URL SOUND_URL = None await message.answer("🗑 Звук удалён")
+async def send_sounds_page(message: Message, page: int = 0): start = page * SOUNDS_PER_PAGE end = start + SOUNDS_PER_PAGE sounds_page = SOUND_URLS[start:end]
 
-@dp.callback_query(lambda c: c.data == "remove_sound") async def callback_remove_sound(callback: CallbackQuery): global SOUND_URL SOUND_URL = None await callback.message.edit_caption( caption="❌ Звук удалён", reply_markup=None ) if callback.message.photo else await callback.message.edit_text( text="❌ Звук удалён", reply_markup=None ) await callback.answer("Звук удалён")
+if not sounds_page:
+    await message.answer("❌ На этой странице звуков нет.")
+    return
 
-@dp.message() async def handle_buttons(message: Message): if message.text == 'Установить звук': await message.answer('Используй команду /set_sound <ссылка на звук>') elif message.text == 'Удалить звук': await remove_sound_cmd(message) elif message.text == 'Проверить звук': if SOUND_URL: await message.answer(f"Текущий звук: {SOUND_URL}") else: await message.answer("Звук не установлен")
+text = "📃 Список звуков:\n"
+for i, sound in enumerate(sounds_page, start=start + 1):
+    name = sound.get('name') or 'Без имени'
+    text += f"{i}. {name} — {sound['url']}\n"
+
+inline_keyboard = InlineKeyboardMarkup(row_width=2)
+for i, sound in enumerate(sounds_page, start=start):
+    inline_keyboard.add(
+        InlineKeyboardButton(text=f"🗑 {sound.get('name') or 'Без имени'}", callback_data=f"remove_sound_{i}"),
+        InlineKeyboardButton(text=f"✏️ {sound.get('name') or 'Без имени'}", callback_data=f"rename_sound_{i}")
+    )
+
+nav_buttons = []
+if start > 0:
+    nav_buttons.append(InlineKeyboardButton(text='⬅️ Назад', callback_data=f'page_{page-1}'))
+if end < len(SOUND_URLS):
+    nav_buttons.append(InlineKeyboardButton(text='➡️ Вперёд', callback_data=f'page_{page+1}'))
+if nav_buttons:
+    inline_keyboard.row(*nav_buttons)
+
+await message.answer(text, reply_markup=inline_keyboard)
+
+@dp.message() async def handle_buttons(message: Message): if message.text == '➕ Добавить звук': await message.answer('Используй команду /add_sound <ссылка> [название]') elif message.text == '📃 Список звуков': await send_sounds_page(message, page=0)
+
+@dp.callback_query(lambda c: c.data.startswith('page_')) async def callback_page(callback: CallbackQuery): page = int(callback.data.split('_')[1]) await send_sounds_page(callback.message, page) await callback.answer()
+
+@dp.callback_query(lambda c: c.data.startswith("remove_sound_")) async def callback_remove_sound(callback: CallbackQuery): global SOUND_URLS idx = int(callback.data.split("_")[-1]) if 0 <= idx < len(SOUND_URLS): removed = SOUND_URLS.pop(idx) with open(SOUNDS_FILE, 'w') as f: json.dump(SOUND_URLS, f) name = removed.get('name') or removed['url'] await callback.message.edit_text(f"🗑 Звук удалён: {name}", reply_markup=None) await callback.answer("Звук удалён")
+
+@dp.callback_query(lambda c: c.data.startswith("rename_sound_")) async def callback_rename_sound(callback: CallbackQuery): idx = int(callback.data.split("_")[-1]) if 0 <= idx < len(SOUND_URLS): rename_state[callback.from_user.id] = idx await callback.message.answer("✏️ Введи новое имя для этого звука:") await callback.answer()
+
+@dp.message() async def handle_rename(message: Message): if message.from_user.id in rename_state: idx = rename_state.pop(message.from_user.id) SOUND_URLS[idx]['name'] = message.text with open(SOUNDS_FILE, 'w') as f: json.dump(SOUND_URLS, f) await message.answer(f"✅ Звук переименован: {message.text}") return
 
 async def main(): asyncio.create_task(check_new_videos()) await dp.start_polling(bot)
 
