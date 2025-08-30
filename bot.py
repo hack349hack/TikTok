@@ -11,7 +11,7 @@ import os
 import json
 
 # === НАСТРОЙКИ ===
-TOKEN = os.getenv("TOKEN")  # берем токен из переменных Render
+TOKEN = os.getenv("TOKEN")  # TOKEN из переменных Render
 CHECK_INTERVAL = 300
 HISTORY_FILE = 'seen_videos.json'
 SOUNDS_FILE = 'sounds.json'
@@ -58,6 +58,40 @@ def get_main_keyboard():
         )
     )
     return kb
+
+def build_sounds_keyboard(page: int = 0):
+    start = page * SOUNDS_PER_PAGE
+    end = start + SOUNDS_PER_PAGE
+    sounds_page = SOUND_URLS[start:end]
+    if not sounds_page:
+        return None
+
+    keyboard_rows = []
+
+    # Кнопки для каждого звука
+    for i, sound in enumerate(sounds_page, start=start):
+        row = [
+            InlineKeyboardButton(
+                text=f"🗑 {sound.get('name') or 'Без имени'}",
+                callback_data=f"remove_sound_{i}"
+            ),
+            InlineKeyboardButton(
+                text=f"✏️ {sound.get('name') or 'Без имени'}",
+                callback_data=f"rename_sound_{i}"
+            )
+        ]
+        keyboard_rows.append(row)
+
+    # Навигация
+    nav_buttons = []
+    if start > 0:
+        nav_buttons.append(InlineKeyboardButton(text='⬅️ Назад', callback_data=f'page_{page-1}'))
+    if end < len(SOUND_URLS):
+        nav_buttons.append(InlineKeyboardButton(text='➡️ Вперёд', callback_data=f'page_{page+1}'))
+    if nav_buttons:
+        keyboard_rows.append(nav_buttons)
+
+    return InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
 
 # === ПРОВЕРКА НОВЫХ ВИДЕО ===
 async def check_new_videos():
@@ -138,44 +172,16 @@ async def add_sound_get_name(message: Message, state: FSMContext):
     await state.clear()
 
 # === INLINE: СПИСОК ЗВУКОВ ===
-async def send_sounds_page(message: Message, page: int = 0):
-    start = page * 5
-    end = start + 5
-    sounds_page = SOUND_URLS[start:end]
-    if not sounds_page:
-        await message.answer("❌ На этой странице звуков нет.")
-        return
-
-    text = "📃 Список звуков:\n"
-    for i, sound in enumerate(sounds_page, start=start + 1):
-        name = sound.get('name') or 'Без имени'
-        text += f"{i}. {name} — {sound['url']}\n"
-
-    inline_keyboard = InlineKeyboardMarkup(row_width=2)
-    for i, sound in enumerate(sounds_page, start=start):
-        inline_keyboard.add(
-            InlineKeyboardButton(text=f"🗑 {sound.get('name') or 'Без имени'}", callback_data=f"remove_sound_{i}"),
-            InlineKeyboardButton(text=f"✏️ {sound.get('name') or 'Без имени'}", callback_data=f"rename_sound_{i}")
-        )
-
-    nav_buttons = []
-    if start > 0:
-        nav_buttons.append(InlineKeyboardButton(text='⬅️ Назад', callback_data=f'page_{page-1}'))
-    if end < len(SOUND_URLS):
-        nav_buttons.append(InlineKeyboardButton(text='➡️ Вперёд', callback_data=f'page_{page+1}'))
-    if nav_buttons:
-        inline_keyboard.row(*nav_buttons)
-
-    await message.answer(text, reply_markup=inline_keyboard)
-
-# === CALLBACK ДЛЯ СПИСКА ЗВУКОВ ===
 @dp.callback_query(lambda c: c.data == "list_sounds")
 async def inline_list_sounds(callback: CallbackQuery):
-    if not SOUND_URLS:
+    kb = build_sounds_keyboard(page=0)
+    if kb:
+        text = "📃 Список звуков:\n"
+        for i, sound in enumerate(SOUND_URLS[:SOUNDS_PER_PAGE], start=1):
+            text += f"{i}. {sound.get('name') or 'Без имени'} — {sound['url']}\n"
+        await callback.message.answer(text, reply_markup=kb)
+    else:
         await callback.answer("❌ Звуков пока нет", show_alert=True)
-        return
-    await send_sounds_page(callback.message, page=0)
-    await callback.answer()
 
 @dp.callback_query(lambda c: c.data == "no_sounds")
 async def inline_no_sounds(callback: CallbackQuery):
@@ -185,7 +191,14 @@ async def inline_no_sounds(callback: CallbackQuery):
 @dp.callback_query(lambda c: c.data.startswith('page_'))
 async def callback_page(callback: CallbackQuery):
     page = int(callback.data.split('_')[1])
-    await send_sounds_page(callback.message, page)
+    kb = build_sounds_keyboard(page)
+    if kb:
+        start = page * SOUNDS_PER_PAGE
+        end = start + SOUNDS_PER_PAGE
+        text = "📃 Список звуков:\n"
+        for i, sound in enumerate(SOUND_URLS[start:end], start=start+1):
+            text += f"{i}. {sound.get('name') or 'Без имени'} — {sound['url']}\n"
+        await callback.message.edit_text(text, reply_markup=kb)
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data.startswith("remove_sound_"))
