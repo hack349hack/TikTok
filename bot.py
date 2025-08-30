@@ -1,4 +1,12 @@
-import asyncio import requests from bs4 import BeautifulSoup from datetime import datetime, timedelta from aiogram import Bot, Dispatcher, types from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery from aiogram.filters import Command import os, json
+import asyncio
+import requests
+from bs4 import BeautifulSoup
+from datetime import datetime, timedelta
+from aiogram import Bot, Dispatcher, types
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram.filters import Command
+import os
+import json
 
 === НАСТРОЙКИ ===
 
