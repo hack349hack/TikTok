@@ -1,32 +1,33 @@
 import asyncio
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime, timedelta
-from aiogram import Bot, Dispatcher, types
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram import Bot, Dispatcher
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.filters import Command
 from aiogram.fsm.state import StatesGroup, State
-from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.storage.json import JSONStorage
 from aiogram.fsm.context import FSMContext
 import os
 import json
 
 # === НАСТРОЙКИ ===
-TOKEN = os.getenv("TOKEN")
+TOKEN = os.getenv("TOKEN", "8098428478:AAGJJKaREHjQgGPFudgyH1pc_UzzqJUrcgE")
 CHECK_INTERVAL = 300
 HISTORY_FILE = 'seen_videos.json'
 SOUNDS_FILE = 'sounds.json'
 SOUNDS_PER_PAGE = 5
 
-storage = MemoryStorage()
+# JSON-хранилище FSM
+storage = JSONStorage(path="fsm_storage.json")
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=storage)
+
 OWNER_ID = None
 rename_state = {}
 seen_videos = {}
 SOUND_URLS = []
 
-# === Загрузка истории ===
+# === ЗАГРУЗКА ИСТОРИИ ===
 if os.path.exists(HISTORY_FILE):
     with open(HISTORY_FILE, 'r') as f:
         try:
@@ -34,7 +35,7 @@ if os.path.exists(HISTORY_FILE):
         except:
             seen_videos = {}
 
-# === Загрузка звуков ===
+# === ЗАГРУЗКА ЗВУКОВ ===
 if os.path.exists(SOUNDS_FILE):
     with open(SOUNDS_FILE, 'r') as f:
         try:
@@ -42,16 +43,22 @@ if os.path.exists(SOUNDS_FILE):
         except:
             SOUND_URLS = []
 
-# === КЛАВИАТУРА ===
-keyboard = ReplyKeyboardMarkup(
-    keyboard=[[KeyboardButton(text='➕ Добавить звук'), KeyboardButton(text='📃 Список звуков')]],
-    resize_keyboard=True
-)
-
 # === FSM СОСТОЯНИЯ ДЛЯ ДОБАВЛЕНИЯ ЗВУКА ===
 class AddSoundStates(StatesGroup):
     waiting_for_url = State()
     waiting_for_name = State()
+
+# === ДИНАМИЧЕСКАЯ INLINE КЛАВИАТУРА ===
+def get_main_keyboard():
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        InlineKeyboardButton(text="➕ Добавить звук", callback_data="add_sound"),
+        InlineKeyboardButton(
+            text="📃 Список звуков",
+            callback_data="list_sounds" if SOUND_URLS else "no_sounds"
+        )
+    )
+    return kb
 
 # === ПРОВЕРКА НОВЫХ ВИДЕО ===
 async def check_new_videos():
@@ -62,6 +69,7 @@ async def check_new_videos():
             sound_name = sound.get('name') or f'#{idx+1}'
             try:
                 r = requests.get(sound_url, headers={"User-Agent": "Mozilla/5.0"})
+                # Для упрощения можно парсить ссылки с "/video/"
                 soup = BeautifulSoup(r.text, "html.parser")
                 video_elements = soup.find_all("a", href=True)
                 for a in video_elements:
@@ -73,6 +81,7 @@ async def check_new_videos():
                             seen_videos[sound_url].append(video_url)
                             with open(HISTORY_FILE, 'w') as f:
                                 json.dump(seen_videos, f)
+
                             # Миниатюра видео
                             try:
                                 r_video = requests.get(video_url, headers={"User-Agent": "Mozilla/5.0"})
@@ -81,16 +90,20 @@ async def check_new_videos():
                                 thumbnail_url = meta_thumb["content"] if meta_thumb else None
                             except:
                                 thumbnail_url = None
+
                             keyboard_inline = InlineKeyboardMarkup(inline_keyboard=[
                                 [InlineKeyboardButton(text="▶️ Открыть в TikTok", url=video_url)],
                                 [InlineKeyboardButton(text="🗑 Удалить звук", callback_data=f"remove_sound_{idx}"),
                                  InlineKeyboardButton(text="✏️ Переименовать звук", callback_data=f"rename_sound_{idx}")]
                             ])
+
                             caption_text = f"🆕 Новый ролик под звуком: {sound_name}"
+
                             if thumbnail_url:
                                 await bot.send_photo(chat_id=OWNER_ID, photo=thumbnail_url, caption=caption_text, reply_markup=keyboard_inline)
                             else:
                                 await bot.send_message(chat_id=OWNER_ID, text=caption_text, reply_markup=keyboard_inline)
+
             except Exception as e:
                 print("Ошибка:", e)
         await asyncio.sleep(CHECK_INTERVAL)
@@ -100,13 +113,14 @@ async def check_new_videos():
 async def start_cmd(message: Message):
     global OWNER_ID
     OWNER_ID = message.chat.id
-    await message.answer("✅ Бот запущен!", reply_markup=keyboard)
+    await message.answer("✅ Бот запущен!", reply_markup=get_main_keyboard())
 
-# === НАЧАЛО ДОБАВЛЕНИЯ ЗВУКА ===
-@dp.message(Command("add_sound"))
-async def add_sound_start(message: Message, state: FSMContext):
-    await message.answer("🔗 Пришли ссылку на звук TikTok:")
+# === FSM: ДОБАВЛЕНИЕ ЗВУКА (INLINE) ===
+@dp.callback_query(lambda c: c.data == "add_sound")
+async def inline_add_sound(callback: CallbackQuery, state: FSMContext):
+    await callback.message.answer("🔗 Пришли ссылку на звук TikTok:")
     await state.set_state(AddSoundStates.waiting_for_url)
+    await callback.answer()
 
 @dp.message(AddSoundStates.waiting_for_url)
 async def add_sound_get_url(message: Message, state: FSMContext):
@@ -120,17 +134,17 @@ async def add_sound_get_name(message: Message, state: FSMContext):
     url = data['url']
     name = message.text if message.text.lower() != 'нет' else None
     SOUND_URLS.append({'url': url, 'name': name})
+    # Сохраняем историю звуков
     with open(SOUNDS_FILE, 'w') as f:
         json.dump(SOUND_URLS, f)
-    await message.answer(f"✅ Звук добавлен: {name or url}")
+    await message.answer(f"✅ Звук добавлен: {name or url}", reply_markup=get_main_keyboard())
     await state.clear()
 
-# === ОТПРАВКА СТРАНИЦЫ СО СПИСКОМ ЗВУКОВ ===
+# === INLINE: СПИСОК ЗВУКОВ ===
 async def send_sounds_page(message: Message, page: int = 0):
-    start = page * SOUNDS_PER_PAGE
-    end = start + SOUNDS_PER_PAGE
+    start = page * 5
+    end = start + 5
     sounds_page = SOUND_URLS[start:end]
-
     if not sounds_page:
         await message.answer("❌ На этой странице звуков нет.")
         return
@@ -157,15 +171,20 @@ async def send_sounds_page(message: Message, page: int = 0):
 
     await message.answer(text, reply_markup=inline_keyboard)
 
-# === КНОПКИ КЛАВИАТУРЫ ===
-@dp.message()
-async def handle_buttons(message: Message):
-    if message.text == '➕ Добавить звук':
-        await add_sound_start(message, FSMContext(storage=storage))  # Запуск FSM
-    elif message.text == '📃 Список звуков':
-        await send_sounds_page(message, page=0)
+# === CALLBACK ДЛЯ СПИСКА ЗВУКОВ ===
+@dp.callback_query(lambda c: c.data == "list_sounds")
+async def inline_list_sounds(callback: CallbackQuery):
+    if not SOUND_URLS:
+        await callback.answer("❌ Звуков пока нет", show_alert=True)
+        return
+    await send_sounds_page(callback.message, page=0)
+    await callback.answer()
 
-# === CALLBACK QUERY ===
+@dp.callback_query(lambda c: c.data == "no_sounds")
+async def inline_no_sounds(callback: CallbackQuery):
+    await callback.answer("❌ Звуков пока нет", show_alert=True)
+
+# === CALLBACK QUERY: ПАГИНАЦИЯ, УДАЛЕНИЕ, ПЕРЕИМЕНОВАНИЕ ===
 @dp.callback_query(lambda c: c.data.startswith('page_'))
 async def callback_page(callback: CallbackQuery):
     page = int(callback.data.split('_')[1])
@@ -174,15 +193,16 @@ async def callback_page(callback: CallbackQuery):
 
 @dp.callback_query(lambda c: c.data.startswith("remove_sound_"))
 async def callback_remove_sound(callback: CallbackQuery):
-    global SOUND_URLS
     idx = int(callback.data.split("_")[-1])
     if 0 <= idx < len(SOUND_URLS):
         removed = SOUND_URLS.pop(idx)
         with open(SOUNDS_FILE, 'w') as f:
             json.dump(SOUND_URLS, f)
         name = removed.get('name') or removed['url']
-        await callback.message.edit_text(f"🗑 Звук удалён: {name}", reply_markup=None)
+        await callback.message.edit_text(f"🗑 Звук удалён: {name}", reply_markup=get_main_keyboard())
         await callback.answer("Звук удалён")
+
+rename_state = {}
 
 @dp.callback_query(lambda c: c.data.startswith("rename_sound_"))
 async def callback_rename_sound(callback: CallbackQuery):
@@ -199,7 +219,7 @@ async def handle_rename(message: Message):
         SOUND_URLS[idx]['name'] = message.text
         with open(SOUNDS_FILE, 'w') as f:
             json.dump(SOUND_URLS, f)
-        await message.answer(f"✅ Звук переименован: {message.text}")
+        await message.answer(f"✅ Звук переименован: {message.text}", reply_markup=get_main_keyboard())
         return
 
 # === ЗАПУСК БОТА ===
