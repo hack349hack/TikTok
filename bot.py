@@ -5,24 +5,28 @@ from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.filters import Command
+from aiogram.fsm.state import StatesGroup, State
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.context import FSMContext
 import os
 import json
 
 # === НАСТРОЙКИ ===
-TOKEN = os.getenv("TOKEN", "8098428478:AAGJJKaREHjQgGPFudgyH1pc_UzzqJUrcgE")
-CHECK_INTERVAL = 300  # Проверка новых видео каждые N секунд
+TOKEN = os.getenv("TOKEN")
+CHECK_INTERVAL = 300
 HISTORY_FILE = 'seen_videos.json'
 SOUNDS_FILE = 'sounds.json'
-SOUNDS_PER_PAGE = 5  # Кол-во звуков на одной странице
+SOUNDS_PER_PAGE = 5
 
+storage = MemoryStorage()
 bot = Bot(token=TOKEN)
-dp = Dispatcher()
+dp = Dispatcher(storage=storage)
 OWNER_ID = None
-rename_state = {}  # Для хранения состояния переименования
+rename_state = {}
 seen_videos = {}
-SOUND_URLS = []  # Список словарей: [{'url':..., 'name':...}]
+SOUND_URLS = []
 
-# === ЗАГРУЗКА ИСТОРИИ ===
+# === Загрузка истории ===
 if os.path.exists(HISTORY_FILE):
     with open(HISTORY_FILE, 'r') as f:
         try:
@@ -30,7 +34,7 @@ if os.path.exists(HISTORY_FILE):
         except:
             seen_videos = {}
 
-# === ЗАГРУЗКА ЗВУКОВ ===
+# === Загрузка звуков ===
 if os.path.exists(SOUNDS_FILE):
     with open(SOUNDS_FILE, 'r') as f:
         try:
@@ -40,11 +44,14 @@ if os.path.exists(SOUNDS_FILE):
 
 # === КЛАВИАТУРА ===
 keyboard = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text='➕ Добавить звук'), KeyboardButton(text='📃 Список звуков')]
-    ],
+    keyboard=[[KeyboardButton(text='➕ Добавить звук'), KeyboardButton(text='📃 Список звуков')]],
     resize_keyboard=True
 )
+
+# === FSM СОСТОЯНИЯ ДЛЯ ДОБАВЛЕНИЯ ЗВУКА ===
+class AddSoundStates(StatesGroup):
+    waiting_for_url = State()
+    waiting_for_name = State()
 
 # === ПРОВЕРКА НОВЫХ ВИДЕО ===
 async def check_new_videos():
@@ -56,25 +63,16 @@ async def check_new_videos():
             try:
                 r = requests.get(sound_url, headers={"User-Agent": "Mozilla/5.0"})
                 soup = BeautifulSoup(r.text, "html.parser")
-
                 video_elements = soup.find_all("a", href=True)
                 for a in video_elements:
                     if "/video/" in a["href"]:
                         video_url = a["href"]
-                        time_tag = a.find_next("span")
-                        try:
-                            video_time = datetime.strptime(time_tag.text.strip(), '%Y-%m-%d %H:%M')
-                        except:
-                            video_time = datetime.now()
-
                         if sound_url not in seen_videos:
                             seen_videos[sound_url] = []
-
-                        if video_url not in seen_videos[sound_url] and video_time > datetime.now() - timedelta(days=1):
+                        if video_url not in seen_videos[sound_url]:
                             seen_videos[sound_url].append(video_url)
                             with open(HISTORY_FILE, 'w') as f:
                                 json.dump(seen_videos, f)
-
                             # Миниатюра видео
                             try:
                                 r_video = requests.get(video_url, headers={"User-Agent": "Mozilla/5.0"})
@@ -83,48 +81,49 @@ async def check_new_videos():
                                 thumbnail_url = meta_thumb["content"] if meta_thumb else None
                             except:
                                 thumbnail_url = None
-
-                            keyboard_inline = InlineKeyboardMarkup(
-                                inline_keyboard=[
-                                    [InlineKeyboardButton(text="▶️ Открыть в TikTok", url=video_url)],
-                                    [InlineKeyboardButton(text="🗑 Удалить звук", callback_data=f"remove_sound_{idx}"),
-                                     InlineKeyboardButton(text="✏️ Переименовать звук", callback_data=f"rename_sound_{idx}")]
-                                ]
-                            )
-
+                            keyboard_inline = InlineKeyboardMarkup(inline_keyboard=[
+                                [InlineKeyboardButton(text="▶️ Открыть в TikTok", url=video_url)],
+                                [InlineKeyboardButton(text="🗑 Удалить звук", callback_data=f"remove_sound_{idx}"),
+                                 InlineKeyboardButton(text="✏️ Переименовать звук", callback_data=f"rename_sound_{idx}")]
+                            ])
                             caption_text = f"🆕 Новый ролик под звуком: {sound_name}"
-
                             if thumbnail_url:
                                 await bot.send_photo(chat_id=OWNER_ID, photo=thumbnail_url, caption=caption_text, reply_markup=keyboard_inline)
                             else:
                                 await bot.send_message(chat_id=OWNER_ID, text=caption_text, reply_markup=keyboard_inline)
-
             except Exception as e:
                 print("Ошибка:", e)
-
         await asyncio.sleep(CHECK_INTERVAL)
 
-# === СТАРТ БОТА ===
+# === СТАРТ ===
 @dp.message(Command("start"))
 async def start_cmd(message: Message):
     global OWNER_ID
     OWNER_ID = message.chat.id
     await message.answer("✅ Бот запущен!", reply_markup=keyboard)
 
-# === ДОБАВЛЕНИЕ ЗВУКА ===
+# === НАЧАЛО ДОБАВЛЕНИЯ ЗВУКА ===
 @dp.message(Command("add_sound"))
-async def add_sound_cmd(message: Message):
-    global SOUND_URLS
-    parts = message.text.split(maxsplit=2)
-    if len(parts) >= 2:
-        url = parts[1]
-        name = parts[2] if len(parts) == 3 else None
-        SOUND_URLS.append({'url': url, 'name': name})
-        with open(SOUNDS_FILE, 'w') as f:
-            json.dump(SOUND_URLS, f)
-        await message.answer(f"✅ Звук добавлен: {name or url}")
-    else:
-        await message.answer("❌ Использование: /add_sound <ссылка> [название]")
+async def add_sound_start(message: Message, state: FSMContext):
+    await message.answer("🔗 Пришли ссылку на звук TikTok:")
+    await state.set_state(AddSoundStates.waiting_for_url)
+
+@dp.message(AddSoundStates.waiting_for_url)
+async def add_sound_get_url(message: Message, state: FSMContext):
+    await state.update_data(url=message.text)
+    await message.answer("✏️ Теперь пришли название звука (или напиши 'нет' для пропуска):")
+    await state.set_state(AddSoundStates.waiting_for_name)
+
+@dp.message(AddSoundStates.waiting_for_name)
+async def add_sound_get_name(message: Message, state: FSMContext):
+    data = await state.get_data()
+    url = data['url']
+    name = message.text if message.text.lower() != 'нет' else None
+    SOUND_URLS.append({'url': url, 'name': name})
+    with open(SOUNDS_FILE, 'w') as f:
+        json.dump(SOUND_URLS, f)
+    await message.answer(f"✅ Звук добавлен: {name or url}")
+    await state.clear()
 
 # === ОТПРАВКА СТРАНИЦЫ СО СПИСКОМ ЗВУКОВ ===
 async def send_sounds_page(message: Message, page: int = 0):
@@ -158,14 +157,15 @@ async def send_sounds_page(message: Message, page: int = 0):
 
     await message.answer(text, reply_markup=inline_keyboard)
 
-# === ОБРАБОТКА КНОПОК ===
+# === КНОПКИ КЛАВИАТУРЫ ===
 @dp.message()
 async def handle_buttons(message: Message):
     if message.text == '➕ Добавить звук':
-        await message.answer('Используй команду /add_sound <ссылка> [название]')
+        await add_sound_start(message, FSMContext(storage=storage))  # Запуск FSM
     elif message.text == '📃 Список звуков':
         await send_sounds_page(message, page=0)
 
+# === CALLBACK QUERY ===
 @dp.callback_query(lambda c: c.data.startswith('page_'))
 async def callback_page(callback: CallbackQuery):
     page = int(callback.data.split('_')[1])
