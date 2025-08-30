@@ -9,11 +9,9 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.context import FSMContext
 import os
 import json
-from dotenv import load_dotenv
 
-# === ЗАГРУЗКА .env ===
-load_dotenv()
-TOKEN = os.getenv("TOKEN")
+# === ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ===
+TOKEN = os.getenv("TOKEN")  # Render Environment
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 300))
 
 # === НАСТРОЙКИ ===
@@ -235,7 +233,9 @@ async def handle_rename(message: Message):
 
 # === ЗАПУСК БОТА ===
 async def main():
+    # Запускаем проверку новых видео в фоне
     asyncio.create_task(check_new_videos())
+    # Старт polling
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
