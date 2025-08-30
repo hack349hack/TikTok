@@ -7,7 +7,7 @@ from aiogram.types import Message
 from aiogram.filters import Command
 
 # === НАСТРОЙКИ ===
-TOKEN = "ТОКЕН_ТВОЕГО_БОТА"  # вставь токен от BotFather
+TOKEN = "8098428478:AAGJJKaREHjQgGPFudgyH1pc_UzzqJUrcgE"  # вставь токен от BotFather
 CHECK_INTERVAL = 300  # как часто проверять (секунд)
 
 bot = Bot(token=TOKEN)
