@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+env/
+.venv/
+venv/
+*.sqlite3
+
+# Secrets / конфигурации
+*.env
+fsm_storage.json
+sounds.json
+seen_videos.json
