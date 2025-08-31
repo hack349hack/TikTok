@@ -2,7 +2,7 @@ import asyncio
 import requests
 from bs4 import BeautifulSoup
 from aiogram import Bot, Dispatcher
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Update
 from aiogram.filters import Command
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -10,6 +10,8 @@ from aiogram.fsm.context import FSMContext
 import os
 import json
 from aiohttp import web
+from aiohttp.web_request import Request
+from aiohttp.web_response import Response
 
 # === ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ===
 TOKEN = os.getenv("TOKEN")
@@ -92,10 +94,8 @@ def build_sounds_keyboard(page: int = 0):
             )
         ])
 
-    # Кнопка добавления нового звука
     inline_keyboard.append([InlineKeyboardButton(text="➕ Добавить звук", callback_data="add_sound")])
 
-    # Навигация по страницам
     nav_buttons = []
     if start > 0:
         nav_buttons.append(InlineKeyboardButton(text='⬅️ Назад', callback_data=f'page_{page-1}'))
@@ -163,7 +163,6 @@ async def start_cmd(message: Message):
     OWNER_ID = message.chat.id
     await message.answer("✅ Бот запущен!", reply_markup=get_main_keyboard())
 
-# Добавление звука
 @dp.callback_query(lambda c: c.data == "add_sound")
 async def inline_add_sound(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer("🔗 Пришли ссылку на звук TikTok:")
@@ -187,7 +186,7 @@ async def add_sound_get_name(message: Message, state: FSMContext):
     await message.answer(f"✅ Звук добавлен: {name or url}", reply_markup=get_main_keyboard())
     await state.clear()
 
-# Список звуков, удаление, переименование и 5 последних видео
+# Последние 5 видео
 @dp.callback_query(lambda c: c.data.startswith("last_videos_"))
 async def callback_last_videos(callback: CallbackQuery):
     idx = int(callback.data.split("_")[-1])
@@ -211,11 +210,9 @@ async def on_shutdown(app: web.Application):
     await bot.delete_webhook()
     await bot.session.close()
 
-from aiohttp.web_request import Request
-from aiohttp.web_response import Response
-
 async def handle_webhook(request: Request):
-    update = await request.json()
+    data = await request.json()
+    update = Update(**data)  # Преобразуем dict в объект Update
     await dp.feed_update(bot, update)
     return Response(text="OK")
 
