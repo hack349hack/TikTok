@@ -1,7 +1,7 @@
 import asyncio
 import requests
 from bs4 import BeautifulSoup
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.filters import Command
 from aiogram.fsm.state import StatesGroup, State
@@ -10,7 +10,6 @@ from aiogram.fsm.context import FSMContext
 import os
 import json
 from aiohttp import web
-from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
 # === ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ===
 TOKEN = os.getenv("TOKEN")
@@ -89,8 +88,11 @@ def build_sounds_keyboard(page: int = 0):
             )
         ])
 
-    # Добавляем кнопку "Добавить звук" всегда
+    # Кнопка добавления нового звука
     inline_keyboard.append([InlineKeyboardButton(text="➕ Добавить звук", callback_data="add_sound")])
+
+    # Кнопка обновления списка с последними 5 видео
+    inline_keyboard.append([InlineKeyboardButton(text="🔄 Обновить список", callback_data="refresh_sounds")])
 
     # Навигация по страницам
     nav_buttons = []
@@ -160,7 +162,6 @@ async def start_cmd(message: Message):
     OWNER_ID = message.chat.id
     await message.answer("✅ Бот запущен!", reply_markup=get_main_keyboard())
 
-# Добавление звуков
 @dp.callback_query(lambda c: c.data == "add_sound")
 async def inline_add_sound(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer("🔗 Пришли ссылку на звук TikTok:")
@@ -170,7 +171,7 @@ async def inline_add_sound(callback: CallbackQuery, state: FSMContext):
 @dp.message(AddSoundStates.waiting_for_url)
 async def add_sound_get_url(message: Message, state: FSMContext):
     await state.update_data(url=message.text)
-    await message.answer("✏️ Теперь пришли название звука (или напиши 'нет'):")
+    await message.answer("✏️ Теперь пришли название звука (или напиши 'нет' для пропуска):")
     await state.set_state(AddSoundStates.waiting_for_name)
 
 @dp.message(AddSoundStates.waiting_for_name)
@@ -184,13 +185,13 @@ async def add_sound_get_name(message: Message, state: FSMContext):
     await message.answer(f"✅ Звук добавлен: {name or url}", reply_markup=get_main_keyboard())
     await state.clear()
 
-# === CALLBACK: list, remove, rename, pagination ===
+# === СПИСОК ЗВУКОВ ===
 @dp.callback_query(lambda c: c.data == "list_sounds")
 async def inline_list_sounds(callback: CallbackQuery):
     kb = build_sounds_keyboard(page=0)
     if kb:
         text = "📃 Список звуков:\n"
-        for i, sound in enumerate(SOUND_URLS[:5], start=1):
+        for i, sound in enumerate(SOUND_URLS[:SOUNDS_PER_PAGE], start=1):
             text += f"{i}. {sound.get('name') or 'Без имени'} — {sound['url']}\n"
         await callback.message.answer(text, reply_markup=kb)
     else:
@@ -199,6 +200,19 @@ async def inline_list_sounds(callback: CallbackQuery):
 @dp.callback_query(lambda c: c.data == "no_sounds")
 async def inline_no_sounds(callback: CallbackQuery):
     await callback.answer("❌ Звуков пока нет", show_alert=True)
+
+# === CALLBACK: обновление списка, пагинация, удаление, переименование ===
+@dp.callback_query(lambda c: c.data == "refresh_sounds")
+async def callback_refresh_sounds(callback: CallbackQuery):
+    kb = build_sounds_keyboard(page=0)
+    if kb:
+        text = "📃 Обновлённый список звуков:\n"
+        for i, sound in enumerate(SOUND_URLS[:SOUNDS_PER_PAGE], start=1):
+            last_videos = seen_videos.get(sound['url'], [])[-5:]  # последние 5 видео
+            videos_text = "\n".join([f"{j+1}. {v}" for j, v in enumerate(last_videos)]) or "Нет видео"
+            text += f"{i}. {sound.get('name') or 'Без имени'} — {sound['url']}\n{videos_text}\n\n"
+        await callback.message.edit_text(text, reply_markup=kb)
+    await callback.answer("Список обновлён")
 
 @dp.callback_query(lambda c: c.data.startswith('page_'))
 async def callback_page(callback: CallbackQuery):
@@ -225,6 +239,7 @@ async def callback_remove_sound(callback: CallbackQuery):
         await callback.answer("Звук удалён")
 
 rename_state = {}
+
 @dp.callback_query(lambda c: c.data.startswith("rename_sound_"))
 async def callback_rename_sound(callback: CallbackQuery):
     idx = int(callback.data.split("_")[-1])
@@ -254,8 +269,7 @@ async def on_shutdown(app: web.Application):
 
 def setup_webhook():
     app = web.Application()
-    SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path="/webhook")
-    setup_application(app, dp, bot=bot)
+    app.router.add_post("/webhook", dp.update)
     app.on_startup.append(on_startup)
     app.on_shutdown.append(on_shutdown)
     return app
