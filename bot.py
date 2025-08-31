@@ -23,7 +23,8 @@ storage = MemoryStorage()
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=storage)
 
-OWNER_ID = None
+OWNER_ID = message.chat.id  # присваивается при команде /start
+await bot.send_message(chat_id=OWNER_ID, text=caption_text, reply_markup=keyboard_inline)
 rename_state = {}
 seen_videos = {}
 SOUND_URLS = []
