@@ -1,138 +1,120 @@
 import os
 import asyncio
 import logging
-import requests
-from bs4 import BeautifulSoup
-from aiogram import Bot, Dispatcher, types, F
+import aiohttp
+from aiogram import Bot, Dispatcher, F, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# === НАСТРОЙКИ ЧЕРЕЗ ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ===
-API_TOKEN = os.getenv("API_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))  # если не задано → 0
-CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "60"))  # по умолчанию 60 секунд
-
-if not API_TOKEN:
-    raise ValueError("❌ Переменная окружения API_TOKEN не задана!")
-
-# Список звуков (пример)
-SOUND_URLS = [
-    {"name": "Популярный звук", "url": "https://www.tiktok.com/music/sound-12345"},
-    {"name": "Весёлый бит", "url": "https://www.tiktok.com/music/sound-67890"},
-]
-
-# Словарь просмотренных видео
-seen_videos = {s["url"]: [] for s in SOUND_URLS}
-
-# === ЛОГИ ===
+# Логирование
 logging.basicConfig(level=logging.INFO)
 
-# === БОТ ===
-bot = Bot(token=API_TOKEN)
+# --- Переменные окружения ---
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")  # кому слать уведомления
+if not BOT_TOKEN:
+    raise ValueError("❌ Укажи BOT_TOKEN в переменных окружения!")
+
+# --- Настройки ---
+SOUND_URLS = [
+    "https://www.tiktok.com/music/original-sound-1234567890",
+    "https://www.tiktok.com/music/original-sound-9876543210"
+]
+CHECK_INTERVAL = 60  # раз в сколько секунд проверять новые видео
+
+bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-
-# --- ФУНКЦИИ ДЛЯ ПАРСИНГА ---
-def get_latest_videos(sound_url: str, limit: int = 5):
-    """Парсит последние видео по ссылке на звук"""
-    try:
-        r = requests.get(sound_url, headers={"User-Agent": "Mozilla/5.0"})
-        soup = BeautifulSoup(r.text, "html.parser")
-        video_elements = [a["href"] for a in soup.find_all("a", href=True) if "/video/" in a["href"]]
-        return video_elements[:limit]
-    except Exception as e:
-        print(f"Ошибка парсинга {sound_url}: {e}")
-        return []
+# --- Временное хранилище ---
+last_videos = {url: [] for url in SOUND_URLS}
 
 
-# --- КОМАНДА START ---
-@dp.message(F.text == "/start")
-async def start_cmd(message: types.Message):
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📜 Список звуков", callback_data="list_sounds")],
-    ])
-    await message.answer("Привет! 👋\nЯ помогу следить за видео по звукам TikTok.", reply_markup=kb)
+# ==== Парсинг последних видео TikTok ====
+async def fetch_last_videos(sound_url, limit=5):
+    """
+    Заглушка парсинга TikTok.
+    Здесь можно подключить реальный парсер API / playwright / selenium.
+    Пока возвращает тестовые ссылки.
+    """
+    # эмуляция разных видео по звуку
+    return [f"{sound_url}?video={i}" for i in range(1, limit + 1)]
 
 
-# --- СПИСОК ЗВУКОВ ---
-@dp.callback_query(F.data == "list_sounds")
-async def list_sounds(callback: types.CallbackQuery):
-    kb = InlineKeyboardMarkup()
-    for idx, sound in enumerate(SOUND_URLS):
-        kb.add(
-            InlineKeyboardButton(text=f"🎵 {sound['name']}", callback_data=f"sound_{idx}")
-        )
-    await callback.message.answer("Выбери звук:", reply_markup=kb)
-    await callback.answer()
-
-
-# --- ВЫБОР ЗВУКА ---
-@dp.callback_query(F.data.startswith("sound_"))
-async def sound_options(callback: types.CallbackQuery):
-    idx = int(callback.data.split("_")[1])
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🕓 5 последних (история)", callback_data=f"history_{idx}")],
-        [InlineKeyboardButton(text="✨ 5 последних (новое)", callback_data=f"latest_{idx}")],
-    ])
-    await callback.message.answer(f"🎵 {SOUND_URLS[idx]['name']}\nВыберите действие:", reply_markup=kb)
-    await callback.answer()
-
-
-# --- ИСТОРИЯ (из seen_videos) ---
-@dp.callback_query(F.data.startswith("history_"))
-async def show_history(callback: types.CallbackQuery):
-    idx = int(callback.data.split("_")[1])
-    sound = SOUND_URLS[idx]
-    videos = seen_videos.get(sound["url"], [])[:5]
-
-    if not videos:
-        await callback.message.answer("❌ В истории пока нет видео")
-    else:
-        text = f"🎬 История 5 последних видео ({sound['name']}):\n"
-        for i, v in enumerate(videos, start=1):
-            text += f"{i}. {v}\n"
-        await callback.message.answer(text)
-
-    await callback.answer()
-
-
-# --- НОВЫЕ (парсинг сайта) ---
-@dp.callback_query(F.data.startswith("latest_"))
-async def show_latest(callback: types.CallbackQuery):
-    idx = int(callback.data.split("_")[1])
-    sound = SOUND_URLS[idx]
-    videos = get_latest_videos(sound["url"])
-
-    if not videos:
-        await callback.message.answer("❌ Не удалось получить новые видео")
-    else:
-        text = f"✨ 5 новых видео ({sound['name']}):\n"
-        for i, v in enumerate(videos, start=1):
-            text += f"{i}. {v}\n"
-        await callback.message.answer(text)
-
-    await callback.answer()
-
-
-# --- ФОНОВАЯ ПРОВЕРКА ---
+# ==== Проверка новых видео ====
 async def check_new_videos():
-    if ADMIN_ID:
-        await bot.send_message(ADMIN_ID, "✅ Бот запущен и начал проверку новых видео")
     while True:
         for sound in SOUND_URLS:
-            latest = get_latest_videos(sound["url"], limit=1)
-            if latest:
-                last_video = latest[0]
-                if last_video not in seen_videos[sound["url"]]:
-                    seen_videos[sound["url"]].insert(0, last_video)
-                    if ADMIN_ID:
-                        await bot.send_message(ADMIN_ID, f"🔔 Новое видео ({sound['name']}): {last_video}")
+            try:
+                new_videos = await fetch_last_videos(sound)
+                old = set(last_videos.get(sound, []))
+                fresh = [v for v in new_videos if v not in old]
+
+                if fresh:
+                    last_videos[sound] = new_videos
+                    for video in fresh:
+                        msg = f"📢 Новое видео по звуку:\n{sound}\n▶ {video}"
+                        if CHAT_ID:
+                            await bot.send_message(CHAT_ID, msg)
+                        else:
+                            logging.warning("CHAT_ID не задан, уведомление не отправлено")
+
+            except Exception as e:
+                logging.error(f"Ошибка при проверке звука {sound}: {e}")
+
         await asyncio.sleep(CHECK_INTERVAL)
 
 
-# --- ЗАПУСК ---
+# ==== Кнопки ====
+def main_keyboard():
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎵 5 последних видео", callback_data="last5")],
+        [InlineKeyboardButton(text="🎧 Список звуков", callback_data="list_sounds")]
+    ])
+    return kb
+
+
+# ==== Обработчики ====
+@dp.message(F.text == "/start")
+async def start_cmd(message: types.Message):
+    await message.answer("👋 Привет! Я TikTok бот.\nВыбирай действие:", reply_markup=main_keyboard())
+
+
+@dp.callback_query(F.data == "last5")
+async def last5_videos(callback: types.CallbackQuery):
+    text = "🎵 5 последних видео по каждому звуку:\n\n"
+    for sound in SOUND_URLS:
+        videos = await fetch_last_videos(sound, 5)
+        last_videos[sound] = videos
+        text += f"\n🔊 {sound}\n"
+        for v in videos:
+            text += f"▶ {v}\n"
+    await callback.message.answer(text)
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "list_sounds")
+async def list_sounds(callback: types.CallbackQuery):
+    if not SOUND_URLS:
+        await callback.message.answer("⚠️ Список звуков пуст. Добавь ссылки в SOUND_URLS.")
+        await callback.answer()
+        return
+
+    text = "🎧 Доступные звуки:\n\n"
+    for i, url in enumerate(SOUND_URLS, start=1):
+        text += f"{i}. {url}\n"
+
+    if len(text) > 4000:  # защита от краша
+        text = text[:4000] + "\n... обрезано"
+
+    await callback.message.answer(text)
+    await callback.answer()
+
+
+# ==== Запуск ====
 async def main():
-    asyncio.create_task(check_new_videos())  # фоновая задача
-    print("Бот запущен...")
+    # Запускаем проверку новых видео в фоне
+    asyncio.create_task(check_new_videos())
+
+    # Запускаем бота
     await dp.start_polling(bot)
 
 
