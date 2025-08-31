@@ -1,23 +1,3 @@
-import os
-import asyncio
-import logging
-from aiogram import Bot, Dispatcher, F, types
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.fsm.state import StatesGroup, State
-
-# Логирование
-logging.basicConfig(level=logging.INFO)
-
-# --- Переменные окружения ---
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")  # кому слать уведомления
-if not BOT_TOKEN:
-    raise ValueError("❌ Укажи BOT_TOKEN в переменных окружения!")
-
-# --- Настройки ---
-CHECK_INTERVAL = 60  # раз в сколько секунд проверять новые видео
 import asyncio
 import requests
 from bs4 import BeautifulSoup
