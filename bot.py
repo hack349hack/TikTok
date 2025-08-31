@@ -84,7 +84,10 @@ def build_sounds_keyboard(page: int = 0):
             InlineKeyboardButton(
                 text=f"✏️ {sound.get('name') or 'Без имени'}",
                 callback_data=f"rename_sound_{i}"
-            )
+            ),
+            InlineKeyboardButton(
+                text="➕ Добавить звук", 
+                callback_data="add_sound"),
         ])
 
     # Навигация по страницам
