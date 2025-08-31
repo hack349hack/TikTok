@@ -154,9 +154,25 @@ async def check_new_videos():
 async def start_cmd(message: Message):
     global OWNER_ID
     OWNER_ID = message.chat.id
-    await message.answer("✅ Бот запущен! Все действия через кнопки в сообщениях.")
+
+    # Inline-кнопки сразу при старте
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Добавить звук", callback_data="add_sound")],
+            [InlineKeyboardButton(text="📃 Список звуков", callback_data="list_sounds" if SOUND_URLS else "no_sounds")]
+        ]
+    )
+
+    await message.answer(
+        "✅ Бот запущен! Используй кнопки ниже для добавления или просмотра звуков.",
+        reply_markup=kb
+    )
 
 # === ДОБАВЛЕНИЕ ЗВУКА ===
+class AddSoundStates(StatesGroup):
+    waiting_for_url = State()
+    waiting_for_name = State()
+
 @dp.callback_query(lambda c: c.data == "add_sound")
 async def inline_add_sound(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer("🔗 Пришли ссылку на звук TikTok:")
@@ -181,21 +197,11 @@ async def add_sound_get_name(message: Message, state: FSMContext):
     await state.clear()
 
 # === СПИСОК ЗВУКОВ ===
-@dp.callback_query(lambda c: c.data.startswith("list_sounds") or c.data == "page_0")
+@dp.callback_query(lambda c: c.data.startswith("list_sounds") or c.data.startswith("page_"))
 async def inline_list_sounds(callback: CallbackQuery):
-    kb = build_sounds_keyboard(page=0)
-    if kb:
-        text = "📃 Список звуков:\n"
-        for i, sound in enumerate(SOUND_URLS[:SOUNDS_PER_PAGE], start=1):
-            text += f"{i}. {sound.get('name') or 'Без имени'} — {sound['url']}\n"
-        await callback.message.answer(text, reply_markup=kb)
-    else:
-        await callback.answer("❌ Звуков пока нет", show_alert=True)
-
-# === CALLBACK: пагинация, удаление, переименование ===
-@dp.callback_query(lambda c: c.data.startswith('page_'))
-async def callback_page(callback: CallbackQuery):
-    page = int(callback.data.split('_')[1])
+    page = 0
+    if c.data.startswith("page_"):
+        page = int(callback.data.split("_")[1])
     kb = build_sounds_keyboard(page)
     if kb:
         start = page * SOUNDS_PER_PAGE
@@ -204,8 +210,10 @@ async def callback_page(callback: CallbackQuery):
         for i, sound in enumerate(SOUND_URLS[start:end], start=start+1):
             text += f"{i}. {sound.get('name') or 'Без имени'} — {sound['url']}\n"
         await callback.message.edit_text(text, reply_markup=kb)
-    await callback.answer()
+    else:
+        await callback.answer("❌ Звуков пока нет", show_alert=True)
 
+# === CALLBACK: удаление, переименование ===
 @dp.callback_query(lambda c: c.data.startswith("remove_sound_"))
 async def callback_remove_sound(callback: CallbackQuery):
     idx = int(callback.data.split("_")[-1])
@@ -239,11 +247,8 @@ async def handle_rename(message: Message):
 
 # === ЗАПУСК БОТА ===
 async def main():
-    # Запускаем проверку новых видео
     asyncio.create_task(check_new_videos())
-    # Запускаем Web-сервер для Render
     asyncio.create_task(start_web_server())
-    # Старт polling
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
