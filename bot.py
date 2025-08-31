@@ -2,7 +2,7 @@ import asyncio
 import requests
 from bs4 import BeautifulSoup
 from aiogram import Bot, Dispatcher
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Update
 from aiogram.filters import Command
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -51,7 +51,7 @@ class AddSoundStates(StatesGroup):
 
 # === КЛАВИАТУРЫ ===
 def get_main_keyboard():
-    kb = InlineKeyboardMarkup(
+    return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(text="➕ Добавить звук", callback_data="add_sound"),
@@ -62,7 +62,6 @@ def get_main_keyboard():
             ]
         ]
     )
-    return kb
 
 def build_sounds_keyboard(page: int = 0):
     start = page * SOUNDS_PER_PAGE
@@ -72,7 +71,6 @@ def build_sounds_keyboard(page: int = 0):
         return None
 
     inline_keyboard = []
-
     for i, sound in enumerate(sounds_page, start=start):
         inline_keyboard.append([
             InlineKeyboardButton(
@@ -84,11 +82,10 @@ def build_sounds_keyboard(page: int = 0):
                 callback_data=f"rename_sound_{i}"
             ),
             InlineKeyboardButton(
-                text=f"🎬 5 последних видео парсера",
+                text=f"🎬 5 последних видео",
                 callback_data=f"last_videos_{i}"
             )
         ])
-
     inline_keyboard.append([InlineKeyboardButton(text="➕ Добавить звук", callback_data="add_sound")])
 
     nav_buttons = []
@@ -101,7 +98,7 @@ def build_sounds_keyboard(page: int = 0):
 
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
-# === ФУНКЦИЯ ПРОВЕРКИ НОВЫХ ВИДЕО ===
+# === ПРОВЕРКА НОВЫХ ВИДЕО ===
 async def check_new_videos():
     global seen_videos, SOUND_URLS
     while True:
@@ -122,8 +119,14 @@ async def check_new_videos():
                             with open(HISTORY_FILE, 'w') as f:
                                 json.dump(seen_videos, f)
 
-                            # Отправляем уведомление о новом видео
-                            caption_text = f"🆕 Новый ролик под звуком: {sound_name}"
+                            try:
+                                r_video = requests.get(video_url, headers={"User-Agent": "Mozilla/5.0"})
+                                soup_video = BeautifulSoup(r_video.text, "html.parser")
+                                meta_thumb = soup_video.find("meta", property="og:image")
+                                thumbnail_url = meta_thumb["content"] if meta_thumb else None
+                            except:
+                                thumbnail_url = None
+
                             keyboard_inline = InlineKeyboardMarkup(
                                 inline_keyboard=[
                                     [InlineKeyboardButton(text="▶️ Открыть в TikTok", url=video_url)],
@@ -133,7 +136,14 @@ async def check_new_videos():
                                     ]
                                 ]
                             )
-                            await bot.send_message(chat_id=OWNER_ID, text=caption_text, reply_markup=keyboard_inline)
+
+                            caption_text = f"🆕 Новый ролик под звуком: {sound_name}"
+
+                            if thumbnail_url:
+                                await bot.send_photo(chat_id=OWNER_ID, photo=thumbnail_url, caption=caption_text, reply_markup=keyboard_inline)
+                            else:
+                                await bot.send_message(chat_id=OWNER_ID, text=caption_text, reply_markup=keyboard_inline)
+
             except Exception as e:
                 print("Ошибка:", e)
         await asyncio.sleep(CHECK_INTERVAL)
@@ -168,7 +178,7 @@ async def add_sound_get_name(message: Message, state: FSMContext):
     await message.answer(f"✅ Звук добавлен: {name or url}", reply_markup=get_main_keyboard())
     await state.clear()
 
-# === CALLBACK: список звуков, удаление, переименование, последние видео ===
+# === CALLBACKS: список звуков, последние видео, удаление, переименование ===
 @dp.callback_query(lambda c: c.data == "list_sounds")
 async def inline_list_sounds(callback: CallbackQuery):
     kb = build_sounds_keyboard(page=0)
@@ -180,21 +190,19 @@ async def inline_list_sounds(callback: CallbackQuery):
     else:
         await callback.answer("❌ Звуков пока нет", show_alert=True)
 
-@dp.callback_query(lambda c: c.data == "no_sounds")
-async def inline_no_sounds(callback: CallbackQuery):
-    await callback.answer("❌ Звуков пока нет", show_alert=True)
-
-@dp.callback_query(lambda c: c.data.startswith('page_'))
-async def callback_page(callback: CallbackQuery):
-    page = int(callback.data.split('_')[1])
-    kb = build_sounds_keyboard(page)
-    if kb:
-        start = page * SOUNDS_PER_PAGE
-        end = start + SOUNDS_PER_PAGE
-        text = "📃 Список звуков:\n"
-        for i, sound in enumerate(SOUND_URLS[start:end], start=start+1):
-            text += f"{i}. {sound.get('name') or 'Без имени'} — {sound['url']}\n"
-        await callback.message.edit_text(text, reply_markup=kb)
+@dp.callback_query(lambda c: c.data.startswith("last_videos_"))
+async def callback_last_videos(callback: CallbackQuery):
+    idx = int(callback.data.split("_")[-1])
+    sound_url = SOUND_URLS[idx]['url']
+    # Последние 5 видео парсера
+    last_parsed = seen_videos.get(sound_url, [])[-5:]
+    if not last_parsed:
+        await callback.answer("❌ Видео пока нет", show_alert=True)
+        return
+    text = f"🎬 5 последних видео под звуком {SOUND_URLS[idx].get('name') or 'Без имени'}:\n"
+    for i, v in enumerate(reversed(last_parsed), start=1):
+        text += f"{i}. {v}\n"
+    await callback.message.answer(text)
     await callback.answer()
 
 @dp.callback_query(lambda c: c.data.startswith("remove_sound_"))
@@ -209,7 +217,6 @@ async def callback_remove_sound(callback: CallbackQuery):
         await callback.answer("Звук удалён")
 
 rename_state = {}
-
 @dp.callback_query(lambda c: c.data.startswith("rename_sound_"))
 async def callback_rename_sound(callback: CallbackQuery):
     idx = int(callback.data.split("_")[-1])
@@ -226,33 +233,9 @@ async def handle_rename(message: Message):
         with open(SOUNDS_FILE, 'w') as f:
             json.dump(SOUND_URLS, f)
         await message.answer(f"✅ Звук переименован: {message.text}", reply_markup=get_main_keyboard())
-
-# Последние 5 видео парсера (продолжение)
-@dp.callback_query(lambda c: c.data.startswith("last_videos_"))
-async def callback_last_videos(callback: CallbackQuery):
-    idx = int(callback.data.split("_")[-1])
-    sound_url = SOUND_URLS[idx]['url']
-    last_videos = seen_videos.get(sound_url, [])[-5:]  # берём последние 5 видео
-    if not last_videos:
-        await callback.answer("❌ Видео пока нет", show_alert=True)
         return
-    text = f"🎬 5 последних видео под звуком {SOUND_URLS[idx].get('name') or 'Без имени'}:\n"
-    for i, v in enumerate(reversed(last_videos), start=1):
-        text += f"{i}. {v}\n"
-    await callback.message.answer(text)
-    await callback.answer()
 
 # === ЗАПУСК БОТА ===
 if __name__ == "__main__":
     print("Бот запущен...")
-    loop = asyncio.get_event_loop()
-    loop.create_task(check_new_videos())  # запуск проверки новых видео в фоне
-    from aiogram import executor
-    from aiogram import Dispatcher
-    from aiogram import Bot
-
-    from aiogram import types
-
-    # Запуск long polling
-    from aiogram import executor
-    executor.start_polling(dp, skip_updates=True)
+    asyncio.run(check_new_videos())  # запуска
