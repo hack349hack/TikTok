@@ -55,10 +55,7 @@ def get_main_keyboard():
         inline_keyboard=[
             [
                 InlineKeyboardButton(text="➕ Добавить звук", callback_data="add_sound"),
-                InlineKeyboardButton(
-                    text="📃 Список звуков",
-                    callback_data="list_sounds" if SOUND_URLS else "no_sounds"
-                )
+                InlineKeyboardButton(text="📃 Список звуков", callback_data="list_sounds")
             ]
         ]
     )
@@ -72,25 +69,11 @@ def build_sounds_keyboard(page: int = 0):
         return None
 
     inline_keyboard = []
-
     for i, sound in enumerate(sounds_page, start=start):
         inline_keyboard.append([
-            InlineKeyboardButton(
-                text=f"🗑 {sound.get('name') or 'Без имени'}",
-                callback_data=f"remove_sound_{i}"
-            ),
-            InlineKeyboardButton(
-                text=f"✏️ {sound.get('name') or 'Без имени'}",
-                callback_data=f"rename_sound_{i}"
-            ),
-            InlineKeyboardButton(
-                text=f"🎬 5 последних видео",
-                callback_data=f"last_videos_{i}"
-            ),
-            InlineKeyboardButton(
-                text=f"🆕 Новые видео",
-                callback_data=f"new_videos_{i}"
-            )
+            InlineKeyboardButton(text=f"🗑 {sound.get('name') or 'Без имени'}", callback_data=f"remove_sound_{i}"),
+            InlineKeyboardButton(text=f"✏️ {sound.get('name') or 'Без имени'}", callback_data=f"rename_sound_{i}"),
+            InlineKeyboardButton(text="🎬 5 последних видео", callback_data=f"last_videos_{i}")
         ])
 
     inline_keyboard.append([InlineKeyboardButton(text="➕ Добавить звук", callback_data="add_sound")])
@@ -151,6 +134,7 @@ async def check_new_videos():
                                     await bot.send_photo(chat_id=OWNER_ID, photo=thumbnail_url, caption=caption_text, reply_markup=keyboard_inline)
                                 else:
                                     await bot.send_message(chat_id=OWNER_ID, text=caption_text, reply_markup=keyboard_inline)
+
             except Exception as e:
                 print("Ошибка:", e)
         await asyncio.sleep(CHECK_INTERVAL)
@@ -185,36 +169,34 @@ async def add_sound_get_name(message: Message, state: FSMContext):
     await message.answer(f"✅ Звук добавлен: {name or url}", reply_markup=get_main_keyboard())
     await state.clear()
 
-# === Список звуков и кнопки ===
 @dp.callback_query(lambda c: c.data == "list_sounds")
 async def inline_list_sounds(callback: CallbackQuery):
-    kb = build_sounds_keyboard(page=0)
-    if kb:
-        text = "📃 Список звуков:\n"
-        for i, sound in enumerate(SOUND_URLS[:SOUNDS_PER_PAGE], start=1):
-            text += f"{i}. {sound.get('name') or 'Без имени'} — {sound['url']}\n"
-        await callback.message.answer(text, reply_markup=kb)
-    else:
+    if not SOUND_URLS:
         await callback.answer("❌ Звуков пока нет", show_alert=True)
+        return
 
-@dp.callback_query(lambda c: c.data == "no_sounds")
-async def inline_no_sounds(callback: CallbackQuery):
-    await callback.answer("❌ Звуков пока нет", show_alert=True)
+    kb = build_sounds_keyboard(page=0)
+    text = "📃 Список звуков:\n"
+    for i, sound in enumerate(SOUND_URLS[:SOUNDS_PER_PAGE], start=1):
+        text += f"{i}. {sound.get('name') or 'Без имени'} — {sound['url']}\n"
+    await callback.message.answer(text, reply_markup=kb)
 
-# === Callback для пагинации, удаления, переименования ===
-@dp.callback_query(lambda c: c.data.startswith('page_'))
-async def callback_page(callback: CallbackQuery):
-    page = int(callback.data.split('_')[1])
-    kb = build_sounds_keyboard(page)
-    if kb:
-        start = page * SOUNDS_PER_PAGE
-        end = start + SOUNDS_PER_PAGE
-        text = "📃 Список звуков:\n"
-        for i, sound in enumerate(SOUND_URLS[start:end], start=start+1):
-            text += f"{i}. {sound.get('name') or 'Без имени'} — {sound['url']}\n"
-        await callback.message.edit_text(text, reply_markup=kb)
+# === CALLBACK: последние 5 видео ===
+@dp.callback_query(lambda c: c.data.startswith("last_videos_"))
+async def callback_last_videos(callback: CallbackQuery):
+    idx = int(callback.data.split("_")[-1])
+    sound_url = SOUND_URLS[idx]['url']
+    last_videos = seen_videos.get(sound_url, [])[-5:]
+    if not last_videos:
+        await callback.answer("❌ Видео пока нет", show_alert=True)
+        return
+    text = f"🎬 5 последних видео под звуком {SOUND_URLS[idx].get('name') or 'Без имени'}:\n"
+    for i, v in enumerate(reversed(last_videos), start=1):
+        text += f"{i}. {v}\n"
+    await callback.message.answer(text)
     await callback.answer()
 
+# === CALLBACK: удаление/переименование/пагинация ===
 @dp.callback_query(lambda c: c.data.startswith("remove_sound_"))
 async def callback_remove_sound(callback: CallbackQuery):
     idx = int(callback.data.split("_")[-1])
@@ -227,7 +209,6 @@ async def callback_remove_sound(callback: CallbackQuery):
         await callback.answer("Звук удалён")
 
 rename_state = {}
-
 @dp.callback_query(lambda c: c.data.startswith("rename_sound_"))
 async def callback_rename_sound(callback: CallbackQuery):
     idx = int(callback.data.split("_")[-1])
@@ -244,50 +225,25 @@ async def handle_rename(message: Message):
         with open(SOUNDS_FILE, 'w') as f:
             json.dump(SOUND_URLS, f)
         await message.answer(f"✅ Звук переименован: {message.text}", reply_markup=get_main_keyboard())
-        return
 
-# === 5 последних видео по парсеру ===
-@dp.callback_query(lambda c: c.data.startswith("last_videos_"))
-async def callback_last_videos(callback: CallbackQuery):
-    idx = int(callback.data.split("_")[-1])
-    sound_url = SOUND_URLS[idx]['url']
-    last_videos = seen_videos.get(sound_url, [])[-5:]
-    if not last_videos:
-        await callback.answer("❌ Видео пока нет", show_alert=True)
-        return
-    text = f"🎬 5 последних видео под звуком {SOUND_URLS[idx].get('name') or 'Без имени'}:\n"
-    for i, v in enumerate(reversed(last_videos), start=1):
-        text += f"{i}. {v}\n"
-    await callback.message.answer(text)
-    # === Новые видео (непрочитанные) ===
-@dp.callback_query(lambda c: c.data.startswith("new_videos_"))
-async def callback_new_videos(callback: CallbackQuery):
-    idx = int(callback.data.split("_")[-1])
-    sound_url = SOUND_URLS[idx]['url']
-    videos = seen_videos.get(sound_url, [])
-    if not videos:
-        await callback.answer("❌ Видео пока нет", show_alert=True)
-        return
-    # Показываем только новые, которых ещё не показывали
-    text = f"🆕 Новые видео под звуком {SOUND_URLS[idx].get('name') or 'Без имени'}:\n"
-    for i, v in enumerate(reversed(videos[-5:]), start=1):
-        text += f"{i}. {v}\n"
-    await callback.message.answer(text)
+# === ПАГИНАЦИЯ ===
+@dp.callback_query(lambda c: c.data.startswith("page_"))
+async def callback_page(callback: CallbackQuery):
+    page = int(callback.data.split("_")[1])
+    kb = build_sounds_keyboard(page)
+    if kb:
+        text = "📃 Список звуков (страница {}):\n".format(page + 1)
+        start = page * SOUNDS_PER_PAGE
+        end = start + SOUNDS_PER_PAGE
+        for i, sound in enumerate(SOUND_URLS[start:end], start=start+1):
+            text += f"{i}. {sound.get('name') or 'Без имени'} — {sound['url']}\n"
+        await callback.message.edit_text(text, reply_markup=kb)
     await callback.answer()
 
-# === ЗАПУСК БОТА ===
-async def main():
-    asyncio.create_task(check_new_videos())  # запуск проверки новых видео
-    print("Бот запущен в режиме polling...")
-    await dp.start_polling(bot)
-
+# === ОСНОВНОЙ ЦИКЛ ===
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        print("Бот остановлен")
-    await callback.answer()
-
-# === Новые видео (уведомления) ===
-@dp.callback_query(lambda c: c.data.startswith("new_videos_"))
-async def callback_new_v
+    loop = asyncio.get_event_loop()
+    loop.create_task(check_new_videos())
+    print("Бот запущен в режиме polling...")
+    from aiogram import executor
+    executor.start_polling(dp, skip_updates=True)
