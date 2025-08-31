@@ -1,6 +1,4 @@
 aiogram
-requests
-beautifulsoup4
-TikTokApi
-playwright
-asyncio
+selenium
+webdriver-manager
+nest-asyncio
