@@ -86,11 +86,11 @@ def build_sounds_keyboard(page: int = 0):
                 callback_data=f"rename_sound_{i}"
             )
         ])
-            inline_keyboard.append([
-                InlineKeyboardButton(
-                text="➕ Добавить звук", 
-                callback_data="add_sound"),
-        ])
+
+    # Кнопка добавления нового звука
+    inline_keyboard.append([
+        InlineKeyboardButton(text="➕ Добавить звук", callback_data="add_sound")
+    ])
 
     # Навигация по страницам
     nav_buttons = []
