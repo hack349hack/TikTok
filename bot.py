@@ -86,6 +86,10 @@ def build_sounds_keyboard(page: int = 0):
             InlineKeyboardButton(
                 text=f"🎬 5 последних видео",
                 callback_data=f"last_videos_{i}"
+            ),
+            InlineKeyboardButton(
+                text=f"🆕 Новые видео",
+                callback_data=f"new_videos_{i}"
             )
         ])
 
@@ -122,7 +126,14 @@ async def check_new_videos():
                             with open(HISTORY_FILE, 'w') as f:
                                 json.dump(seen_videos, f)
 
-                            # уведомление в телеграм
+                            try:
+                                r_video = requests.get(video_url, headers={"User-Agent": "Mozilla/5.0"})
+                                soup_video = BeautifulSoup(r_video.text, "html.parser")
+                                meta_thumb = soup_video.find("meta", property="og:image")
+                                thumbnail_url = meta_thumb["content"] if meta_thumb else None
+                            except:
+                                thumbnail_url = None
+
                             keyboard_inline = InlineKeyboardMarkup(
                                 inline_keyboard=[
                                     [InlineKeyboardButton(text="▶️ Открыть в TikTok", url=video_url)],
@@ -135,8 +146,11 @@ async def check_new_videos():
 
                             caption_text = f"🆕 Новый ролик под звуком: {sound_name}"
 
-                            await bot.send_message(chat_id=OWNER_ID, text=caption_text, reply_markup=keyboard_inline)
-
+                            if OWNER_ID:
+                                if thumbnail_url:
+                                    await bot.send_photo(chat_id=OWNER_ID, photo=thumbnail_url, caption=caption_text, reply_markup=keyboard_inline)
+                                else:
+                                    await bot.send_message(chat_id=OWNER_ID, text=caption_text, reply_markup=keyboard_inline)
             except Exception as e:
                 print("Ошибка:", e)
         await asyncio.sleep(CHECK_INTERVAL)
@@ -171,22 +185,8 @@ async def add_sound_get_name(message: Message, state: FSMContext):
     await message.answer(f"✅ Звук добавлен: {name or url}", reply_markup=get_main_keyboard())
     await state.clear()
 
-# === CALLBACKS ===
-@dp.callback_query(lambda c: c.data.startswith("last_videos_"))
-async def callback_last_videos(callback: CallbackQuery):
-    idx = int(callback.data.split("_")[-1])
-    sound_url = SOUND_URLS[idx]['url']
-    last_videos = seen_videos.get(sound_url, [])[-5:]
-    if not last_videos:
-        await callback.answer("❌ Видео пока нет", show_alert=True)
-        return
-    text = f"🎬 5 последних видео под звуком {SOUND_URLS[idx].get('name') or 'Без имени'}:\n"
-    for i, v in enumerate(reversed(last_videos), start=1):
-        text += f"{i}. {v}\n"
-    await callback.message.answer(text)
-    await callback.answer()
-
-@dp.callback_query(lambda c: c.data.startswith("list_sounds"))
+# === Список звуков и кнопки ===
+@dp.callback_query(lambda c: c.data == "list_sounds")
 async def inline_list_sounds(callback: CallbackQuery):
     kb = build_sounds_keyboard(page=0)
     if kb:
@@ -201,6 +201,20 @@ async def inline_list_sounds(callback: CallbackQuery):
 async def inline_no_sounds(callback: CallbackQuery):
     await callback.answer("❌ Звуков пока нет", show_alert=True)
 
+# === Callback для пагинации, удаления, переименования ===
+@dp.callback_query(lambda c: c.data.startswith('page_'))
+async def callback_page(callback: CallbackQuery):
+    page = int(callback.data.split('_')[1])
+    kb = build_sounds_keyboard(page)
+    if kb:
+        start = page * SOUNDS_PER_PAGE
+        end = start + SOUNDS_PER_PAGE
+        text = "📃 Список звуков:\n"
+        for i, sound in enumerate(SOUND_URLS[start:end], start=start+1):
+            text += f"{i}. {sound.get('name') or 'Без имени'} — {sound['url']}\n"
+        await callback.message.edit_text(text, reply_markup=kb)
+    await callback.answer()
+
 @dp.callback_query(lambda c: c.data.startswith("remove_sound_"))
 async def callback_remove_sound(callback: CallbackQuery):
     idx = int(callback.data.split("_")[-1])
@@ -212,6 +226,8 @@ async def callback_remove_sound(callback: CallbackQuery):
         await callback.message.edit_text(f"🗑 Звук удалён: {name}", reply_markup=get_main_keyboard())
         await callback.answer("Звук удалён")
 
+rename_state = {}
+
 @dp.callback_query(lambda c: c.data.startswith("rename_sound_"))
 async def callback_rename_sound(callback: CallbackQuery):
     idx = int(callback.data.split("_")[-1])
@@ -221,20 +237,57 @@ async def callback_rename_sound(callback: CallbackQuery):
         await callback.answer()
 
 @dp.message()
-async def handle_rename_sound(message: Message):
-    user_id = message.from_user.id
-    if user_id in rename_state:
-        idx = rename_state.pop(user_id)
+async def handle_rename(message: Message):
+    if message.from_user.id in rename_state:
+        idx = rename_state.pop(message.from_user.id)
         SOUND_URLS[idx]['name'] = message.text
         with open(SOUNDS_FILE, 'w') as f:
             json.dump(SOUND_URLS, f)
-        await message.answer(f"✏️ Звук переименован: {message.text}", reply_markup=get_main_keyboard())
+        await message.answer(f"✅ Звук переименован: {message.text}", reply_markup=get_main_keyboard())
+        return
+
+# === 5 последних видео по парсеру ===
+@dp.callback_query(lambda c: c.data.startswith("last_videos_"))
+async def callback_last_videos(callback: CallbackQuery):
+    idx = int(callback.data.split("_")[-1])
+    sound_url = SOUND_URLS[idx]['url']
+    last_videos = seen_videos.get(sound_url, [])[-5:]
+    if not last_videos:
+        await callback.answer("❌ Видео пока нет", show_alert=True)
+        return
+    text = f"🎬 5 последних видео под звуком {SOUND_URLS[idx].get('name') or 'Без имени'}:\n"
+    for i, v in enumerate(reversed(last_videos), start=1):
+        text += f"{i}. {v}\n"
+    await callback.message.answer(text)
+    # === Новые видео (непрочитанные) ===
+@dp.callback_query(lambda c: c.data.startswith("new_videos_"))
+async def callback_new_videos(callback: CallbackQuery):
+    idx = int(callback.data.split("_")[-1])
+    sound_url = SOUND_URLS[idx]['url']
+    videos = seen_videos.get(sound_url, [])
+    if not videos:
+        await callback.answer("❌ Видео пока нет", show_alert=True)
+        return
+    # Показываем только новые, которых ещё не показывали
+    text = f"🆕 Новые видео под звуком {SOUND_URLS[idx].get('name') or 'Без имени'}:\n"
+    for i, v in enumerate(reversed(videos[-5:]), start=1):
+        text += f"{i}. {v}\n"
+    await callback.message.answer(text)
+    await callback.answer()
 
 # === ЗАПУСК БОТА ===
 async def main():
-    asyncio.create_task(check_new_videos())
-    print("Бот запущен!")
+    asyncio.create_task(check_new_videos())  # запуск проверки новых видео
+    print("Бот запущен в режиме polling...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        print("Бот остановлен")
+    await callback.answer()
+
+# === Новые видео (уведомления) ===
+@dp.callback_query(lambda c: c.data.startswith("new_videos_"))
+async def callback_new_v
