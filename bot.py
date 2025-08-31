@@ -9,10 +9,12 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.context import FSMContext
 import os
 import json
+from aiohttp import web
 
 # === ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ===
 TOKEN = os.getenv("TOKEN")  # Render Environment
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 300))
+PORT = int(os.getenv("PORT", 10000))  # Render Web Service порт
 
 # === НАСТРОЙКИ ===
 HISTORY_FILE = 'seen_videos.json'
@@ -95,6 +97,19 @@ def build_sounds_keyboard(page: int = 0):
         inline_keyboard.append(nav_buttons)
 
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+# === HTTP-СЕРВЕР ДЛЯ RENDER ===
+async def handle(request):
+    return web.Response(text="Bot is running")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/", handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
+    print(f"Web server started on port {PORT}")
 
 # === ПРОВЕРКА НОВЫХ ВИДЕО ===
 async def check_new_videos():
@@ -240,8 +255,10 @@ async def handle_rename(message: Message):
 
 # === ЗАПУСК БОТА ===
 async def main():
-    # Запускаем проверку новых видео в фоне
+    # Запускаем проверку новых видео
     asyncio.create_task(check_new_videos())
+    # Запускаем Web-сервер для Render
+    asyncio.create_task(start_web_server())
     # Старт polling
     await dp.start_polling(bot)
 
