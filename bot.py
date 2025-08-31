@@ -2,22 +2,17 @@ import asyncio
 import requests
 from bs4 import BeautifulSoup
 from aiogram import Bot, Dispatcher
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Update
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.filters import Command
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.context import FSMContext
 import os
 import json
-from aiohttp import web
-from aiohttp.web_request import Request
-from aiohttp.web_response import Response
 
 # === ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ===
 TOKEN = os.getenv("TOKEN")
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 300))
-PORT = int(os.getenv("PORT", 10000))
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # https://your-app.onrender.com/webhook
 
 # === НАСТРОЙКИ ===
 HISTORY_FILE = 'seen_videos.json'
@@ -127,14 +122,7 @@ async def check_new_videos():
                             with open(HISTORY_FILE, 'w') as f:
                                 json.dump(seen_videos, f)
 
-                            try:
-                                r_video = requests.get(video_url, headers={"User-Agent": "Mozilla/5.0"})
-                                soup_video = BeautifulSoup(r_video.text, "html.parser")
-                                meta_thumb = soup_video.find("meta", property="og:image")
-                                thumbnail_url = meta_thumb["content"] if meta_thumb else None
-                            except:
-                                thumbnail_url = None
-
+                            # уведомление в телеграм
                             keyboard_inline = InlineKeyboardMarkup(
                                 inline_keyboard=[
                                     [InlineKeyboardButton(text="▶️ Открыть в TikTok", url=video_url)],
@@ -147,10 +135,7 @@ async def check_new_videos():
 
                             caption_text = f"🆕 Новый ролик под звуком: {sound_name}"
 
-                            if thumbnail_url:
-                                await bot.send_photo(chat_id=OWNER_ID, photo=thumbnail_url, caption=caption_text, reply_markup=keyboard_inline)
-                            else:
-                                await bot.send_message(chat_id=OWNER_ID, text=caption_text, reply_markup=keyboard_inline)
+                            await bot.send_message(chat_id=OWNER_ID, text=caption_text, reply_markup=keyboard_inline)
 
             except Exception as e:
                 print("Ошибка:", e)
@@ -186,7 +171,7 @@ async def add_sound_get_name(message: Message, state: FSMContext):
     await message.answer(f"✅ Звук добавлен: {name or url}", reply_markup=get_main_keyboard())
     await state.clear()
 
-# Последние 5 видео
+# === CALLBACKS ===
 @dp.callback_query(lambda c: c.data.startswith("last_videos_"))
 async def callback_last_videos(callback: CallbackQuery):
     idx = int(callback.data.split("_")[-1])
@@ -201,27 +186,55 @@ async def callback_last_videos(callback: CallbackQuery):
     await callback.message.answer(text)
     await callback.answer()
 
-# === WEBHOOK-СЕРВЕР ===
-async def on_startup(app: web.Application):
-    await bot.set_webhook(WEBHOOK_URL)
+@dp.callback_query(lambda c: c.data.startswith("list_sounds"))
+async def inline_list_sounds(callback: CallbackQuery):
+    kb = build_sounds_keyboard(page=0)
+    if kb:
+        text = "📃 Список звуков:\n"
+        for i, sound in enumerate(SOUND_URLS[:SOUNDS_PER_PAGE], start=1):
+            text += f"{i}. {sound.get('name') or 'Без имени'} — {sound['url']}\n"
+        await callback.message.answer(text, reply_markup=kb)
+    else:
+        await callback.answer("❌ Звуков пока нет", show_alert=True)
+
+@dp.callback_query(lambda c: c.data == "no_sounds")
+async def inline_no_sounds(callback: CallbackQuery):
+    await callback.answer("❌ Звуков пока нет", show_alert=True)
+
+@dp.callback_query(lambda c: c.data.startswith("remove_sound_"))
+async def callback_remove_sound(callback: CallbackQuery):
+    idx = int(callback.data.split("_")[-1])
+    if 0 <= idx < len(SOUND_URLS):
+        removed = SOUND_URLS.pop(idx)
+        with open(SOUNDS_FILE, 'w') as f:
+            json.dump(SOUND_URLS, f)
+        name = removed.get('name') or removed['url']
+        await callback.message.edit_text(f"🗑 Звук удалён: {name}", reply_markup=get_main_keyboard())
+        await callback.answer("Звук удалён")
+
+@dp.callback_query(lambda c: c.data.startswith("rename_sound_"))
+async def callback_rename_sound(callback: CallbackQuery):
+    idx = int(callback.data.split("_")[-1])
+    if 0 <= idx < len(SOUND_URLS):
+        rename_state[callback.from_user.id] = idx
+        await callback.message.answer("✏️ Введи новое имя для этого звука:")
+        await callback.answer()
+
+@dp.message()
+async def handle_rename_sound(message: Message):
+    user_id = message.from_user.id
+    if user_id in rename_state:
+        idx = rename_state.pop(user_id)
+        SOUND_URLS[idx]['name'] = message.text
+        with open(SOUNDS_FILE, 'w') as f:
+            json.dump(SOUND_URLS, f)
+        await message.answer(f"✏️ Звук переименован: {message.text}", reply_markup=get_main_keyboard())
+
+# === ЗАПУСК БОТА ===
+async def main():
     asyncio.create_task(check_new_videos())
-
-async def on_shutdown(app: web.Application):
-    await bot.delete_webhook()
-    await bot.session.close()
-
-async def handle_webhook(request: Request):
-    data = await request.json()
-    update = Update(**data)  # Преобразуем dict в объект Update
-    await dp.feed_update(bot, update)
-    return Response(text="OK")
-
-def setup_webhook():
-    app = web.Application()
-    app.router.add_post("/webhook", handle_webhook)
-    app.on_startup.append(on_startup)
-    app.on_shutdown.append(on_shutdown)
-    return app
+    print("Бот запущен!")
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    web.run_app(setup_webhook(), host="0.0.0.0", port=PORT)
+    asyncio.run(main())
