@@ -1,57 +1,68 @@
 import os
-import json
 import asyncio
-from aiogram import Bot, Dispatcher
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+import json
+import logging
+from aiogram import Bot, Dispatcher, types
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, Message
 from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.fsm.context import FSMContext
 from TikTokApi import TikTokApi
 
-# === ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ===
-TOKEN = os.getenv("TOKEN")
-OWNER_ID = int(os.getenv("OWNER_ID", "0"))
-CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 300))
+# --- Логирование ---
+logging.basicConfig(level=logging.INFO)
 
-# === ФАЙЛЫ ===
+# --- Переменные окружения ---
+TOKEN = os.getenv("TOKEN")
+CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", 300))
+if not TOKEN:
+    raise ValueError("Укажи TOKEN в переменных окружения!")
+
+# --- Файлы хранения ---
 HISTORY_FILE = 'seen_videos.json'
 SOUNDS_FILE = 'sounds.json'
 SOUNDS_PER_PAGE = 5
 
-# === ИНИЦИАЛИЗАЦИЯ ===
+# --- Инициализация бота ---
 storage = MemoryStorage()
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=storage)
 
+OWNER_ID = None
+rename_state = {}
 seen_videos = {}
 SOUND_URLS = []
-rename_state = {}
 
-# === ЗАГРУЗКА ДАННЫХ ===
+# --- Загрузка истории ---
 if os.path.exists(HISTORY_FILE):
     with open(HISTORY_FILE, 'r') as f:
-        seen_videos = json.load(f)
+        try:
+            seen_videos = json.load(f)
+        except:
+            seen_videos = {}
 
+# --- Загрузка звуков ---
 if os.path.exists(SOUNDS_FILE):
     with open(SOUNDS_FILE, 'r') as f:
-        SOUND_URLS = json.load(f)
+        try:
+            SOUND_URLS = json.load(f)
+        except:
+            SOUND_URLS = []
 
-# === FSM СОСТОЯНИЯ ===
+# --- FSM состояния ---
 class AddSoundStates(StatesGroup):
     waiting_for_url = State()
     waiting_for_name = State()
 
-# === КЛАВИАТУРЫ ===
+# --- Клавиатуры ---
 def get_main_keyboard():
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="➕ Добавить звук", callback_data="add_sound"),
-                InlineKeyboardButton(text="📃 Список звуков", callback_data="list_sounds")
-            ]
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="➕ Добавить звук", callback_data="add_sound"),
+            InlineKeyboardButton(text="📃 Список звуков", callback_data="list_sounds")
         ]
-    )
+    ])
 
 def build_sounds_keyboard(page: int = 0):
     start = page * SOUNDS_PER_PAGE
@@ -80,33 +91,32 @@ def build_sounds_keyboard(page: int = 0):
 
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
-# === ПРОВЕРКА НОВЫХ ВИДЕО ===
+# --- TikTok API ---
+api = TikTokApi()
+
+# --- Проверка новых видео ---
 async def check_new_videos():
     global seen_videos, SOUND_URLS
-    api = TikTokApi.get_instance()
     while True:
         for idx, sound in enumerate(SOUND_URLS):
             sound_url = sound['url']
             sound_name = sound.get('name') or f'#{idx+1}'
             try:
-                music = api.get_music_by_url(sound_url)
-                music_id = music['id']
-                videos = api.bySound(music_id, count=5)
-                new_videos = []
+                # Получаем ID звука из ссылки
+                sound_id = sound_url.rstrip('/').split('/')[-1]
 
-                for video in videos:
-                    video_url = f"https://www.tiktok.com/@{video['author']['uniqueId']}/video/{video['id']}"
+                # Получаем последние 5 видео
+                videos = api.by_sound(sound_id, count=5)
+
+                for v in videos:
+                    video_url = f"https://www.tiktok.com/@{v['author']['uniqueId']}/video/{v['id']}"
                     if sound_url not in seen_videos:
                         seen_videos[sound_url] = []
                     if video_url not in seen_videos[sound_url]:
                         seen_videos[sound_url].append(video_url)
-                        new_videos.append(video_url)
+                        with open(HISTORY_FILE, 'w') as f:
+                            json.dump(seen_videos, f)
 
-                if new_videos:
-                    with open(HISTORY_FILE, 'w') as f:
-                        json.dump(seen_videos, f)
-
-                    for video_url in new_videos:
                         keyboard_inline = InlineKeyboardMarkup(
                             inline_keyboard=[
                                 [InlineKeyboardButton(text="▶️ Открыть в TikTok", url=video_url)],
@@ -117,18 +127,22 @@ async def check_new_videos():
                             ]
                         )
                         caption_text = f"🆕 Новый ролик под звуком: {sound_name}"
-                        await bot.send_message(chat_id=OWNER_ID, text=caption_text, reply_markup=keyboard_inline)
+                        if OWNER_ID:
+                            await bot.send_message(chat_id=OWNER_ID, text=caption_text, reply_markup=keyboard_inline)
 
             except Exception as e:
-                print(f"Ошибка при обработке звука {sound_url}: {e}")
+                print("Ошибка при получении видео по звуку:", e)
 
         await asyncio.sleep(CHECK_INTERVAL)
 
-# === ОБРАБОТЧИКИ ===
+# --- Обработчики команд ---
 @dp.message(Command("start"))
 async def start_cmd(message: Message):
+    global OWNER_ID
+    OWNER_ID = message.chat.id
     await message.answer("✅ Бот запущен!", reply_markup=get_main_keyboard())
 
+# --- Добавление звука ---
 @dp.callback_query(lambda c: c.data == "add_sound")
 async def inline_add_sound(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer("🔗 Пришли ссылку на звук TikTok:")
@@ -152,6 +166,7 @@ async def add_sound_get_name(message: Message, state: FSMContext):
     await message.answer(f"✅ Звук добавлен: {name or url}", reply_markup=get_main_keyboard())
     await state.clear()
 
+# --- Список звуков ---
 @dp.callback_query(lambda c: c.data == "list_sounds")
 async def callback_list_sounds(callback: CallbackQuery):
     kb = build_sounds_keyboard()
@@ -161,6 +176,7 @@ async def callback_list_sounds(callback: CallbackQuery):
         await callback.message.answer("❌ Список пуст")
     await callback.answer()
 
+# --- Удаление и переименование ---
 @dp.callback_query(lambda c: c.data.startswith("remove_sound_"))
 async def callback_remove_sound(callback: CallbackQuery):
     idx = int(callback.data.split("_")[-1])
@@ -188,6 +204,7 @@ async def handle_rename(message: Message):
         await message.answer(f"✅ Звук переименован: {message.text}", reply_markup=get_main_keyboard())
         return
 
+# --- Последние видео ---
 @dp.callback_query(lambda c: c.data.startswith("last_videos_"))
 async def callback_last_videos(callback: CallbackQuery):
     parts = callback.data.split("_")
@@ -198,7 +215,13 @@ async def callback_last_videos(callback: CallbackQuery):
     if mode == "history":
         last_videos = seen_videos.get(sound_url, [])[-5:]
     else:
-        last_videos = []
+        try:
+            sound_id = sound_url.rstrip('/').split('/')[-1]
+            videos = api.by_sound(sound_id, count=5)
+            last_videos = [f"https://www.tiktok.com/@{v['author']['uniqueId']}/video/{v['id']}" for v in videos]
+        except Exception as e:
+            print("Ошибка при парсинге последних видео:", e)
+            last_videos = []
 
     if not last_videos:
         await callback.answer("❌ Видео пока нет", show_alert=True)
@@ -211,9 +234,8 @@ async def callback_last_videos(callback: CallbackQuery):
     await callback.message.answer(text)
     await callback.answer()
 
-# === ЗАПУСК БОТА ===
+# --- Запуск бота ---
 async def main():
-    # Запускаем проверку новых видео в фоне
     asyncio.create_task(check_new_videos())
     print("Бот запущен...")
     await dp.start_polling(bot)
