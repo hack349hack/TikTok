@@ -213,6 +213,7 @@ async def callback_latest_videos(callback: CallbackQuery):
         text = f"🎥 5 последних видео с TikTok под звуком {SOUND_URLS[idx].get('name') or 'Без имени'}:\n"
         for i, v in enumerate(last_videos, start=1):
             text += f"{i}. {v}\n"
+            await callback.answer(text)
         await callback.answer()
     except Exception as e:
         await callback.answer(f"❌ Ошибка при получении видео: {e}", show_alert=True)
