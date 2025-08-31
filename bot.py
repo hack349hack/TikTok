@@ -86,6 +86,10 @@ def build_sounds_keyboard(page: int = 0):
             InlineKeyboardButton(
                 text=f"🎬 5 последних видео",
                 callback_data=f"last_videos_{i}"
+            ),
+            InlineKeyboardButton(
+                text=f"🆕 Свежие видео",
+                callback_data=f"fresh_videos_{i}"
             )
         ])
 
@@ -181,69 +185,11 @@ async def add_sound_get_name(message: Message, state: FSMContext):
     await message.answer(f"✅ Звук добавлен: {name or url}", reply_markup=get_main_keyboard())
     await state.clear()
 
-# === Список звуков и навигация ===
-@dp.callback_query(lambda c: c.data == "list_sounds")
-async def inline_list_sounds(callback: CallbackQuery):
-    kb = build_sounds_keyboard(page=0)
-    if kb:
-        text = "📃 Список звуков:\n"
-        for i, sound in enumerate(SOUND_URLS[:SOUNDS_PER_PAGE], start=1):
-            text += f"{i}. {sound.get('name') or 'Без имени'} — {sound['url']}\n"
-        await callback.message.answer(text, reply_markup=kb)
-    else:
-        await callback.answer("❌ Звуков пока нет", show_alert=True)
-
-@dp.callback_query(lambda c: c.data == "no_sounds")
-async def inline_no_sounds(callback: CallbackQuery):
-    await callback.answer("❌ Звуков пока нет", show_alert=True)
-
-@dp.callback_query(lambda c: c.data.startswith('page_'))
-async def callback_page(callback: CallbackQuery):
-    page = int(callback.data.split('_')[1])
-    kb = build_sounds_keyboard(page)
-    if kb:
-        start = page * SOUNDS_PER_PAGE
-        end = start + SOUNDS_PER_PAGE
-        text = "📃 Список звуков:\n"
-        for i, sound in enumerate(SOUND_URLS[start:end], start=start+1):
-            text += f"{i}. {sound.get('name') or 'Без имени'} — {sound['url']}\n"
-        await callback.message.edit_text(text, reply_markup=kb)
-    await callback.answer()
-
-@dp.callback_query(lambda c: c.data.startswith("remove_sound_"))
-async def callback_remove_sound(callback: CallbackQuery):
-    idx = int(callback.data.split("_")[-1])
-    if 0 <= idx < len(SOUND_URLS):
-        removed = SOUND_URLS.pop(idx)
-        with open(SOUNDS_FILE, 'w') as f:
-            json.dump(SOUND_URLS, f)
-        name = removed.get('name') or removed['url']
-        await callback.message.edit_text(f"🗑 Звук удалён: {name}", reply_markup=get_main_keyboard())
-        await callback.answer("Звук удалён")
-
-@dp.callback_query(lambda c: c.data.startswith("rename_sound_"))
-async def callback_rename_sound(callback: CallbackQuery):
-    idx = int(callback.data.split("_")[-1])
-    rename_state[callback.from_user.id] = idx
-    await callback.message.answer("✏️ Пришли новое имя для звука:")
-    await callback.answer()
-
-@dp.message()
-async def handle_rename(message: Message):
-    user_id = message.from_user.id
-    if user_id in rename_state:
-        idx = rename_state.pop(user_id)
-        SOUND_URLS[idx]['name'] = message.text
-        with open(SOUNDS_FILE, 'w') as f:
-            json.dump(SOUND_URLS, f)
-        await message.answer(f"✅ Звук переименован: {message.text}", reply_markup=get_main_keyboard())
-
-# === Последние 5 видео под звуком ===
+# === CALLBACK: последние видео из истории ===
 @dp.callback_query(lambda c: c.data.startswith("last_videos_"))
 async def callback_last_videos(callback: CallbackQuery):
     idx = int(callback.data.split("_")[-1])
     sound_url = SOUND_URLS[idx]['url']
-    # берём последние 5 видео по истории
     last_videos = seen_videos.get(sound_url, [])[-5:]
     if not last_videos:
         await callback.answer("❌ Видео пока нет", show_alert=True)
@@ -254,10 +200,90 @@ async def callback_last_videos(callback: CallbackQuery):
     await callback.message.answer(text)
     await callback.answer()
 
-# === Запуск бота ===
-async def main():
-    asyncio.create_task(check_new_videos())  # уведомления о новых видео
-    await dp.start_polling(bot)
+# === CALLBACK: свежие видео с сайта ===
+@dp.callback_query(lambda c: c.data.startswith("fresh_videos_"))
+async def callback_fresh_videos(callback: CallbackQuery):
+    idx = int(callback.data.split("_")[-1])
+    sound_url = SOUND_URLS[idx]['url']
+    try:
+        r = requests.get(sound_url, headers={"User-Agent": "Mozilla/5.0"})
+        soup = BeautifulSoup(r.text, "html.parser")
+        video_elements = [a["href"] for a in soup.find_all("a", href=True) if "/video/" in a["href"]]
+        last_5 = video_elements[-5:]
+        if not last_5:
+            await callback.answer("❌ Видео не найдено", show_alert=True)
+            return
+        text = f"🎬 5 свежих видео под звуком {SOUND_URLS[idx].get('name') or 'Без имени'}:\n"
+        for i, v in enumerate(reversed(last_5), start=1):
+            text += f"{i}. {v}\n"
+        await callback.message.answer(text)
+        await callback.answer()
+    except Exception as e:
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
 
+# === CALLBACK: список звуков ===
+@dp.callback_query(lambda c: c.data.startswith("list_sounds"))
+async def callback_list_sounds(callback: CallbackQuery):
+    kb = build_sounds_keyboard()
+    if kb:
+        await callback.message.answer("📃 Список звуков:", reply_markup=kb)
+    else:
+        await callback.message.answer("❌ Список пуст.")
+    await callback.answer()
+
+# === CALLBACK: нет звуков ===
+@dp.callback_query(lambda c: c.data == "no_sounds")
+async def callback_no_sounds(callback: CallbackQuery):
+    await callback.answer("❌ Список звуков пуст", show_alert=True)
+
+# === CALLBACK: навигация по страницам ===
+@dp.callback_query(lambda c: c.data.startswith("page_"))
+async def callback_page(callback: CallbackQuery):
+    page = int(callback.data.split("_")[1])
+    kb = build_sounds_keyboard(page)
+    if kb:
+        await callback.message.edit_reply_markup(kb)
+    await callback.answer()
+
+# === CALLBACK: удалить звук ===
+@dp.callback_query(lambda c: c.data.startswith("remove_sound_"))
+async def callback_remove_sound(callback: CallbackQuery):
+    idx = int(callback.data.split("_")[-1])
+    if idx < len(SOUND_URLS):
+        removed = SOUND_URLS.pop(idx)
+        with open(SOUNDS_FILE, 'w') as f:
+            json.dump(SOUND_URLS, f)
+        await callback.message.answer(f"🗑 Звук удален: {removed.get('name') or removed['url']}")
+        kb = build_sounds_keyboard()
+        if kb:
+            await callback.message.edit_reply_markup(kb)
+    await callback.answer()
+
+# === CALLBACK: переименовать звук ===
+@dp.callback_query(lambda c: c.data.startswith("rename_sound_"))
+async def callback_rename_sound(callback: CallbackQuery, state: FSMContext):
+    idx = int(callback.data.split("_")[-1])
+    rename_state[callback.from_user.id] = idx
+    await callback.message.answer("✏️ Введи новое название звука:")
+    await state.set_state(AddSoundStates.waiting_for_name)
+    await callback.answer()
+
+# === FSM: переименование звука ===
+@dp.message(AddSoundStates.waiting_for_name)
+async def rename_sound(message: Message, state: FSMContext):
+    idx = rename_state.get(message.from_user.id)
+    if idx is not None and idx < len(SOUND_URLS):
+        SOUND_URLS[idx]['name'] = message.text
+        with open(SOUNDS_FILE, 'w') as f:
+            json.dump(SOUND_URLS, f)
+        await message.answer(f"✅ Звук переименован: {message.text}", reply_markup=get_main_keyboard())
+        rename_state.pop(message.from_user.id)
+    await state.clear()
+
+# === ЗАПУСК БОТА ===
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Запускаем проверку новых видео параллельно
+    asyncio.create_task(check_new_videos())
+    # Стартуем long polling
+    from aiogram import executor
+    executor.start_polling(dp, skip_updates=True)
