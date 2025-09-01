@@ -1,6 +1,4 @@
 aiogram
-selenium
-webdriver-manager
-beautifulsoup4
+TikTokApi
 requests
-nest-asyncio
+beautifulsoup4
