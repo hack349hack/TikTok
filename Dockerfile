@@ -6,18 +6,15 @@ WORKDIR /app
 
 # Копируем файлы проекта
 COPY requirements.txt .
-COPY src ./src
-COPY .env.sample .env
+COPY bot.py .
 
 # Устанавливаем зависимости
-RUN pip install --no-cache-dir --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Создаём __pycache__ и делаем src пакетом
-RUN touch src/__init__.py
+# Переменные окружения (будут подхватываться из Amvera)
+ENV TELEGRAM_TOKEN=$TELEGRAM_TOKEN
+ENV VK_TOKEN=$VK_TOKEN
+ENV TOP_LIMIT=$TOP_LIMIT
 
-# Переменные окружения (токен через Amwera)
-ENV TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
-
-# Команда запуска через пакет src
-CMD ["python", "-m", "src.bot"]
+# Запуск бота
+CMD ["python", "bot.py"]
