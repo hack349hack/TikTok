@@ -5,9 +5,9 @@ from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, C
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
-from settings import SETTINGS
-from storage import open_db, list_sounds, upsert_sound, subscribe, unsubscribe
-from tiktok import fetch_music_videos, music_id_from_input, MUSIC_URL_FMT
+from .settings import SETTINGS
+from .storage import open_db, list_sounds, upsert_sound, subscribe, unsubscribe
+from .tiktok import fetch_music_videos, music_id_from_input, MUSIC_URL_FMT
 
 # === Инициализация бота ===
 bot = Bot(token=SETTINGS.telegram_token)  # parse_mode задаём при отправке сообщений
