@@ -1,6 +1,6 @@
 from aiogram import Bot, Dispatcher
-from settings import SETTINGS
-from tiktok import monitor_music
+from .settings import SETTINGS
+from .tiktok import monitor_music
 import asyncio
 
 bot = Bot(token=SETTINGS.telegram_token)
