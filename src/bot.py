@@ -9,28 +9,23 @@ from .settings import SETTINGS
 from .storage import open_db, list_sounds, upsert_sound, subscribe, unsubscribe
 from .tiktok import fetch_music_videos, music_id_from_input, MUSIC_URL_FMT
 
-# === Инициализация бота ===
-bot = Bot(token=SETTINGS.telegram_token)  # parse_mode задаём при отправке сообщений
+bot = Bot(token=SETTINGS.telegram_token)
 dp = Dispatcher()
 
-# === FSM ===
 class TrackSound(StatesGroup):
     waiting_for_link = State()
 
 class TrackHashtag(StatesGroup):
     waiting_for_tag = State()
 
-# === Главное меню ===
 def main_menu() -> InlineKeyboardMarkup:
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎵 Отслеживать звук", callback_data="track_sound")],
-        [InlineKeyboardButton(text="📄 Список отслеживаемых", callback_data="list_sounds")],
-        [InlineKeyboardButton(text="❌ Удалить звук", callback_data="untrack_sound")],
-        [InlineKeyboardButton(text="#️⃣ Отслеживать хэштег", callback_data="track_hashtag")],
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton("🎵 Отслеживать звук", callback_data="track_sound")],
+        [InlineKeyboardButton("📄 Список отслеживаемых", callback_data="list_sounds")],
+        [InlineKeyboardButton("❌ Удалить звук", callback_data="untrack_sound")],
+        [InlineKeyboardButton("#️⃣ Отслеживать хэштег", callback_data="track_hashtag")],
     ])
-    return kb
 
-# === /start ===
 @dp.message(Command("start"))
 async def cmd_start(m: Message):
     await m.reply(
@@ -39,7 +34,6 @@ async def cmd_start(m: Message):
         parse_mode="HTML"
     )
 
-# === Inline handlers ===
 @dp.callback_query()
 async def cb_handler(c: CallbackQuery, state: FSMContext):
     data = c.data
@@ -65,7 +59,6 @@ async def cb_handler(c: CallbackQuery, state: FSMContext):
             unsubscribe(conn, c.message.chat.id, "sound", mid)
         await c.message.answer(f"Удалено: {mid}", parse_mode="HTML")
 
-# === FSM handlers ===
 @dp.message(TrackSound.waiting_for_link)
 async def fsm_track_sound(m: Message, state: FSMContext):
     mid = music_id_from_input(m.text)
@@ -91,21 +84,28 @@ async def fsm_track_hashtag(m: Message, state: FSMContext):
     await m.reply(f"✅ Хэштег добавлен: <b>#{tag}</b>", reply_markup=main_menu(), parse_mode="HTML")
     await state.clear()
 
-# === Scheduler (упрощённо) ===
 async def scheduler_loop():
     while True:
         try:
             with open_db() as conn:
                 sound_ids = [r[0] for r in conn.execute("SELECT music_id FROM tracked_sounds").fetchall()]
             for mid in sound_ids:
-                items, _ = await fetch_music_videos(mid, http_proxy=SETTINGS.http_proxy, limit=10)
-                # рассылка пользователям здесь
+                videos, last_ts = await fetch_music_videos(mid, http_proxy=SETTINGS.http_proxy, limit=10)
+                with open_db() as conn:
+                    subs = [r[0] for r in conn.execute(
+                        "SELECT chat_id FROM subscriptions WHERE type='sound' AND identifier=?", (mid,)
+                    ).fetchall()]
+                for video in videos:
+                    if int(video.get("ts", 0)) > last_ts:
+                        for chat_id in subs:
+                            await bot.send_message(chat_id, f"Новое видео под звук {mid}:\n{video['url']}", parse_mode="HTML")
+                with open_db() as conn:
+                    conn.execute("UPDATE tracked_sounds SET last_ts=? WHERE music_id=?", (last_ts, mid))
         except Exception as e:
             if SETTINGS.admin_chat_id:
                 await bot.send_message(SETTINGS.admin_chat_id, f"Scheduler error: {e}", parse_mode="HTML")
         await asyncio.sleep(SETTINGS.poll_interval_sec)
 
-# === Main ===
 async def main():
     if not SETTINGS.telegram_token:
         raise SystemExit("TELEGRAM_TOKEN пустой")
