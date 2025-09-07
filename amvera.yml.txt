@@ -1,17 +1,14 @@
-name: tiktok-sound-watcher
-services:
-  bot:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    run:
-      command: python -m src.bot
-    env:
-      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
-      - ADMIN_CHAT_ID=${ADMIN_CHAT_ID}
-      - POLL_INTERVAL_SEC=${POLL_INTERVAL_SEC:-180}
-      - TZ=${TZ:-Europe/Moscow}
-      - HTTP_PROXY=${HTTP_PROXY}
-    resources:
-      cpu: 0.5
-      memory: 512Mi
+project:
+  name: vk_playlist_bot
+  description: Telegram бот для поиска публичных плейлистов ВКонтакте по песне
+  python_version: "3.11"
+
+environment:
+  variables:
+    TELEGRAM_TOKEN: ""  # вставить в Amvera UI
+    VK_TOKEN: ""        # вставить в Amvera UI
+    TOP_LIMIT: "10"
+
+docker:
+  enabled: true
+  dockerfile: Dockerfile
