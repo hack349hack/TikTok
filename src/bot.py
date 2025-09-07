@@ -3,7 +3,7 @@ import asyncio
 from datetime import datetime, timezone
 from typing import Optional
 
-from aiogram import Dispatcher, Bot
+from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
 from aiogram.client.bot import DefaultBotProperties
 from aiogram.filters import Command
@@ -13,10 +13,13 @@ from aiogram.fsm.context import FSMContext
 
 from .settings import SETTINGS
 from .storage import open_db, list_sounds, upsert_sound, subscribe, unsubscribe, subscribers
-from .tiktok import fetch_music_videos, music_id_from_input, discover_new_sounds_by_hashtag, MUSIC_URL_FMT
+from .tiktok import fetch_music_videos, music_id_from_input, MUSIC_URL_FMT
 
 # === Инициализация бота ===
-bot = Bot(token=SETTINGS.telegram_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+bot = Bot(
+    token=SETTINGS.telegram_token,
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+)
 dp = Dispatcher()
 
 # === FSM состояния ===
@@ -44,7 +47,10 @@ def main_menu() -> InlineKeyboardMarkup:
 # === /start ===
 @dp.message(Command("start"))
 async def cmd_start(m: Message):
-    await m.reply("Добро пожаловать! Используйте кнопки ниже для управления ботом:", reply_markup=main_menu())
+    await m.reply(
+        "Добро пожаловать! Используйте кнопки ниже для управления ботом:",
+        reply_markup=main_menu()
+    )
 
 # === Обработка нажатий ===
 @dp.callback_query()
@@ -94,7 +100,8 @@ async def fsm_track_sound(m: Message, state: FSMContext):
     with open_db() as conn:
         upsert_sound(conn, mid, title=f"sound {mid}", last_ts=0)
         subscribe(conn, m.chat.id, "sound", mid)
-    await m.reply(f"✅ Звук добавлен: <code>{mid}</code>\n{MUSIC_URL_FMT.format(mid=mid)}", reply_markup=main_menu())
+    await m.reply(f"✅ Звук добавлен: <code>{mid}</code>\n{MUSIC_URL_FMT.format(mid=mid)}",
+                  reply_markup=main_menu())
     await state.clear()
 
 @dp.message(TrackHashtag.waiting_for_tag)
@@ -106,24 +113,15 @@ async def fsm_track_hashtag(m: Message, state: FSMContext):
     await m.reply(f"✅ Хэштег добавлен: <b>#{tag}</b>", reply_markup=main_menu())
     await state.clear()
 
-# === Scheduler для видео/хэштегов ===
-async def notify_new_videos(music_id: str):
-    items, title = await fetch_music_videos(music_id, http_proxy=SETTINGS.http_proxy, limit=50)
-    with open_db() as conn:
-        last_ts, last_ids = conn.cursor().execute(
-            "SELECT last_ts, last_ids FROM tracked_sounds WHERE music_id=?", (music_id,)
-        ).fetchone() or (0, "[]")
-    # Здесь можно добавить полноценный update состояния и рассылку пользователям
-    # Для простоты оставлено минимально
-
+# === Scheduler (упрощённо) ===
 async def scheduler_loop():
     while True:
         try:
             with open_db() as conn:
                 sound_ids = [r[0] for r in conn.execute("SELECT music_id FROM tracked_sounds").fetchall()]
             for mid in sound_ids:
-                await notify_new_videos(mid)
-            # Тут добавить хэштеги аналогично
+                items, _ = await fetch_music_videos(mid, http_proxy=SETTINGS.http_proxy, limit=10)
+                # Тут можно добавить рассылку пользователям
         except Exception as e:
             if SETTINGS.admin_chat_id:
                 await bot.send_message(SETTINGS.admin_chat_id, f"Scheduler error: {e}")
