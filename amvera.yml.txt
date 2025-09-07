@@ -1,11 +1,7 @@
-meta:
-  environment: python
-  toolchain:
-    name: pip
-    version: 3.8
-build:
-  requirementsPath: requirements.txt
-run:
-  command: python3 bot.py
-  persistenceMount: /data
-  containerPort: 80
+name: tiktok-sound-watcher
+run: python -m src.bot
+healthcheck:
+http_path: /
+grace_period: 30
+interval: 30
+timeout: 5
