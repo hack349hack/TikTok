@@ -1,116 +1,87 @@
 import asyncio
-from aiogram import Bot, Dispatcher
-from aiogram.filters import Command
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.context import FSMContext
+from aiogram import Bot, Dispatcher, types
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.filters import CommandStart
+from settings import SETTINGS
+from tiktok import music_id_from_input, fetch_music_videos
 
-from .settings import SETTINGS
-from .storage import open_db, list_sounds, upsert_sound, subscribe, unsubscribe
-from .tiktok import fetch_music_videos, music_id_from_input, MUSIC_URL_FMT
-
-bot = Bot(token=SETTINGS.telegram_token)
+bot = Bot(token=SETTINGS.bot_token)
 dp = Dispatcher()
 
-class TrackSound(StatesGroup):
-    waiting_for_link = State()
+# Хранилище активных трекеров
+trackers = {}  # user_id -> {music_id, last_ts}
 
-class TrackHashtag(StatesGroup):
-    waiting_for_tag = State()
 
-def main_menu() -> InlineKeyboardMarkup:
+def main_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton("🎵 Отслеживать звук", callback_data="track_sound")],
-        [InlineKeyboardButton("📄 Список отслеживаемых", callback_data="list_sounds")],
-        [InlineKeyboardButton("❌ Удалить звук", callback_data="untrack_sound")],
-        [InlineKeyboardButton("#️⃣ Отслеживать хэштег", callback_data="track_hashtag")],
     ])
 
-@dp.message(Command("start"))
-async def cmd_start(m: Message):
-    await m.reply(
-        "Добро пожаловать! Используйте кнопки ниже:",
-        reply_markup=main_menu(),
-        parse_mode="HTML"
+
+@dp.message(CommandStart())
+async def cmd_start(message: types.Message):
+    await message.answer(
+        "👋 Привет! Я помогу тебе отслеживать новые видео по звуку TikTok.\n"
+        "Нажми кнопку ниже, чтобы выбрать звук.",
+        reply_markup=main_menu()
     )
 
-@dp.callback_query()
-async def cb_handler(c: CallbackQuery, state: FSMContext):
-    data = c.data
-    if data == "track_sound":
-        await c.message.answer("Пришлите ссылку или ID звука:", parse_mode="HTML")
-        await state.set_state(TrackSound.waiting_for_link)
-    elif data == "track_hashtag":
-        await c.message.answer("Пришлите хэштег (без #):", parse_mode="HTML")
-        await state.set_state(TrackHashtag.waiting_for_tag)
-    elif data == "list_sounds":
-        with open_db() as conn:
-            sounds = list_sounds(conn)
-        if not sounds:
-            await c.message.answer("Список пуст.", parse_mode="HTML")
-        else:
-            kb = InlineKeyboardMarkup()
-            for mid, title, _ in sounds:
-                kb.add(InlineKeyboardButton(text=f"{title or mid} ❌", callback_data=f"del_sound:{mid}"))
-            await c.message.answer("Список отслеживаемых звуков:", reply_markup=kb, parse_mode="HTML")
-    elif data.startswith("del_sound:"):
-        mid = data.split(":", 1)[1]
-        with open_db() as conn:
-            unsubscribe(conn, c.message.chat.id, "sound", mid)
-        await c.message.answer(f"Удалено: {mid}", parse_mode="HTML")
 
-@dp.message(TrackSound.waiting_for_link)
-async def fsm_track_sound(m: Message, state: FSMContext):
-    mid = music_id_from_input(m.text)
-    if not mid:
-        await m.reply("Не удалось распознать music_id.", parse_mode="HTML")
+@dp.callback_query(lambda c: c.data == "track_sound")
+async def process_track_sound(callback: types.CallbackQuery):
+    await callback.message.answer("🎵 Отправь ссылку или ID звука TikTok:")
+    await callback.answer()
+
+
+@dp.message()
+async def handle_text(message: types.Message):
+    user_id = message.from_user.id
+    music_id = music_id_from_input(message.text)
+
+    if not music_id:
+        await message.answer("❌ Не удалось распознать sound ID. Пришли корректную ссылку или число.")
         return
-    with open_db() as conn:
-        upsert_sound(conn, mid, title=f"sound {mid}", last_ts=0)
-        subscribe(conn, m.chat.id, "sound", mid)
-    await m.reply(
-        f"✅ Звук добавлен: <code>{mid}</code>\n{MUSIC_URL_FMT.format(mid=mid)}",
-        reply_markup=main_menu(),
-        parse_mode="HTML"
-    )
-    await state.clear()
 
-@dp.message(TrackHashtag.waiting_for_tag)
-async def fsm_track_hashtag(m: Message, state: FSMContext):
-    tag = m.text.strip().lstrip("#")
-    with open_db() as conn:
-        conn.execute("INSERT OR IGNORE INTO tracked_hashtags(tag) VALUES(?)", (tag,))
-        subscribe(conn, m.chat.id, "hashtag", tag)
-    await m.reply(f"✅ Хэштег добавлен: <b>#{tag}</b>", reply_markup=main_menu(), parse_mode="HTML")
-    await state.clear()
+    await message.answer(f"🔎 Ищу видео по звуку `{music_id}`...")
 
-async def scheduler_loop():
+    videos, last_ts = await fetch_music_videos(music_id)
+    if not videos:
+        await message.answer("❌ Не удалось найти видео с этим звуком.")
+        return
+
+    # Сохраняем трекер
+    trackers[user_id] = {"music_id": music_id, "last_ts": last_ts}
+
+    # Отправляем первые найденные видео
+    text = "\n".join(f"▶️ {v['url']}" for v in videos)
+    await message.answer(f"Нашёл {len(videos)} видео:\n\n{text}\n\n✅ Теперь я буду следить за новыми!")
+
+
+async def tracker_loop():
     while True:
-        try:
-            with open_db() as conn:
-                sound_ids = [r[0] for r in conn.execute("SELECT music_id FROM tracked_sounds").fetchall()]
-            for mid in sound_ids:
-                videos, last_ts = await fetch_music_videos(mid, http_proxy=SETTINGS.http_proxy, limit=10)
-                with open_db() as conn:
-                    subs = [r[0] for r in conn.execute(
-                        "SELECT chat_id FROM subscriptions WHERE type='sound' AND identifier=?", (mid,)
-                    ).fetchall()]
-                for video in videos:
-                    if int(video.get("ts", 0)) > last_ts:
-                        for chat_id in subs:
-                            await bot.send_message(chat_id, f"Новое видео под звук {mid}:\n{video['url']}", parse_mode="HTML")
-                with open_db() as conn:
-                    conn.execute("UPDATE tracked_sounds SET last_ts=? WHERE music_id=?", (last_ts, mid))
-        except Exception as e:
-            if SETTINGS.admin_chat_id:
-                await bot.send_message(SETTINGS.admin_chat_id, f"Scheduler error: {e}", parse_mode="HTML")
-        await asyncio.sleep(SETTINGS.poll_interval_sec)
+        for user_id, data in list(trackers.items()):
+            music_id = data["music_id"]
+            last_ts = data["last_ts"]
+
+            try:
+                videos, new_last_ts = await fetch_music_videos(music_id)
+            except Exception as e:
+                print(f"Ошибка парсинга для {music_id}: {e}")
+                continue
+
+            new_videos = [v for v in videos if v["ts"] > last_ts]
+            if new_videos:
+                trackers[user_id]["last_ts"] = max(v["ts"] for v in new_videos)
+                text = "\n".join(f"🆕 {v['url']}" for v in new_videos)
+                await bot.send_message(user_id, f"🎬 Новые видео по звуку {music_id}:\n\n{text}")
+
+        await asyncio.sleep(60)  # проверка раз в минуту
+
 
 async def main():
-    if not SETTINGS.telegram_token:
-        raise SystemExit("TELEGRAM_TOKEN пустой")
-    asyncio.create_task(scheduler_loop())
+    asyncio.create_task(tracker_loop())
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
