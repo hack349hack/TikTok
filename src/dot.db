@@ -1,0 +1,19 @@
+-- Таблица для отслеживаемых звуков
+CREATE TABLE IF NOT EXISTS tracked_sounds (
+    music_id TEXT PRIMARY KEY,
+    title TEXT,
+    last_ts INTEGER DEFAULT 0
+);
+
+-- Таблица для подписок пользователей
+CREATE TABLE IF NOT EXISTS subscriptions (
+    chat_id INTEGER,
+    type TEXT,           -- 'sound' или 'hashtag'
+    identifier TEXT,     -- music_id или hashtag
+    PRIMARY KEY (chat_id, type, identifier)
+);
+
+-- Таблица для отслеживаемых хэштегов
+CREATE TABLE IF NOT EXISTS tracked_hashtags (
+    tag TEXT PRIMARY KEY
+);
