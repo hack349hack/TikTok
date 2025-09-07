@@ -1,13 +1,14 @@
-
 from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 from typing import Iterable
 
-from aiogram import Bot, Dispatcher, F
+from aiogram import Dispatcher
 from aiogram.filters import Command
 from aiogram.types import Message
 from aiogram.enums import ParseMode
+from aiogram.client.bot import DefaultBotProperties
+from aiogram import Bot
 
 from .settings import SETTINGS
 from .storage import (
@@ -17,7 +18,11 @@ from .storage import (
 from .tiktok import fetch_music_videos, music_id_from_input, discover_new_sounds_by_hashtag, MUSIC_URL_FMT
 
 
-bot = Bot(token=SETTINGS.telegram_token, parse_mode=ParseMode.HTML)
+# === Инициализация бота ===
+bot = Bot(
+    token=SETTINGS.telegram_token,
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+)
 dp = Dispatcher()
 
 
@@ -32,6 +37,7 @@ HELP = (
 )
 
 
+# === Команды ===
 @dp.message(Command("start"))
 async def cmd_start(m: Message):
     await m.reply(HELP)
@@ -86,7 +92,6 @@ async def cmd_track_hashtag(m: Message):
         await m.reply("Укажите хэштег без #")
         return
     tag = args[1].strip().lstrip("#")
-    from .storage import sqlite3
     with open_db() as conn:
         conn.execute("INSERT OR IGNORE INTO tracked_hashtags(tag) VALUES(?)", (tag,))
         subscribe(conn, m.chat.id, "hashtag", tag)
@@ -112,11 +117,12 @@ async def cmd_set_interval(m: Message):
         await m.reply("Укажите число минут, например: /set_interval 3")
         return
     minutes = int(args[1].strip())
-    from .settings import os
+    import os
     os.environ["POLL_INTERVAL_SEC"] = str(minutes * 60)
     await m.reply(f"Интервал поставлен на {minutes} мин.")
 
 
+# === Асинхронный шедулер ===
 async def notify_new_videos(music_id: str):
     from .settings import SETTINGS
     items, title = await fetch_music_videos(music_id, http_proxy=SETTINGS.http_proxy, limit=50)
@@ -124,7 +130,6 @@ async def notify_new_videos(music_id: str):
     with open_db() as conn:
         last_ts, last_ids = get_sound_state(conn, music_id)
         new_items = [it for it in items if it.create_time > (last_ts or 0) and it.id not in last_ids]
-        # если last_ts пуст — взять только 3 свежих, чтобы не заспамить
         if last_ts == 0:
             new_items = new_items[:3]
         if items:
@@ -139,7 +144,6 @@ async def notify_new_videos(music_id: str):
     if not new_items:
         return
 
-    # Отправка
     for it in sorted(new_items, key=lambda x: x.create_time):
         text = (
             f"<b>Новый ролик под звук</b> <code>{music_id}</code>\n"
@@ -148,13 +152,12 @@ async def notify_new_videos(music_id: str):
             f"Описание: {it.desc[:500]}\n"
             f"Звук: {MUSIC_URL_FMT.format(mid=music_id)}"
         )
-        # шлём всем подписанным чатам
         await asyncio.gather(*[bot.send_message(chat_id, text) for chat_id in chats])
 
 
 async def sweep_hashtags():
     from .settings import SETTINGS
-    from .storage import sqlite3
+    import json
     with open_db() as conn:
         cur = conn.execute("SELECT tag, last_video_ids FROM tracked_hashtags")
         rows = cur.fetchall()
@@ -168,15 +171,12 @@ async def sweep_hashtags():
         new_pairs = []
         seen_ids = set()
         try:
-            import json
             seen_ids = set(json.loads(last_ids_json or "[]"))
         except Exception:
             seen_ids = set()
-        # уведомления по новым музыкам
         for mid, title in pairs:
             if mid not in seen_ids:
                 new_pairs.append((mid, title))
-        # обновляем и шлём
         if new_pairs:
             with open_db() as conn:
                 conn.execute(
@@ -195,7 +195,6 @@ async def sweep_hashtags():
 async def scheduler_loop():
     while True:
         try:
-            # 1) звуки
             with open_db() as conn:
                 cur = conn.execute("SELECT music_id FROM tracked_sounds")
                 sound_ids = [r[0] for r in cur.fetchall()]
@@ -205,7 +204,6 @@ async def scheduler_loop():
                 except Exception as e:
                     if SETTINGS.admin_chat_id:
                         await bot.send_message(SETTINGS.admin_chat_id, f"Ошибка sound {mid}: {e}")
-            # 2) хэштеги -> новые звуки
             await sweep_hashtags()
         except Exception as e:
             if SETTINGS.admin_chat_id:
@@ -216,10 +214,10 @@ async def scheduler_loop():
 async def main():
     if not SETTINGS.telegram_token:
         raise SystemExit("TELEGRAM_TOKEN is empty")
-    # запускаем шедулер
     asyncio.create_task(scheduler_loop())
     await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
     asyncio.run(main())
+    
