@@ -1,93 +1,77 @@
-from __future__ import annotations
 import asyncio
-import json
-import re
+from typing import List, Tuple, Optional
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Any, Iterable
+import httpx
+import re
 
-
-from playwright.async_api import async_playwright
-
-
-SIGI_RE = re.compile(r"<script id=\"SIGI_STATE\"[^>]*>(.*?)</script>", re.S)
-MUSIC_URL_RE = re.compile(r"https?://(?:www\.)?tiktok\.com/music/[^/]*-(\d+)")
-VIDEO_URL_FMT = "https://www.tiktok.com/@{author}/video/{vid}"
-MUSIC_URL_FMT = "https://www.tiktok.com/music/_-{mid}"
+MUSIC_URL_FMT = "https://www.tiktok.com/music/original-sound-{mid}"
 
 
 @dataclass
-class VideoItem:
-id: str
-create_time: int
-author: str
-desc: str
-cover: str | None
+class TikTokVideo:
+    id: str
+    desc: str
+    create_time: int
+    author: str
+
+    def link(self) -> str:
+        return f"https://www.tiktok.com/@{self.author}/video/{self.id}"
 
 
-def link(self) -> str:
-return VIDEO_URL_FMT.format(author=self.author, vid=self.id)
+def music_id_from_input(text: str) -> Optional[str]:
+    """Пытаемся извлечь music_id из ссылки или текста"""
+    match = re.search(r"(?:/music/|original-sound-)(\d+)", text)
+    return match.group(1) if match else None
 
 
+async def fetch_music_videos(music_id: str, http_proxy: Optional[str] = None, limit: int = 20) -> Tuple[List[TikTokVideo], Optional[str]]:
+    """
+    Fetch recent videos for a TikTok music (sound) id.
+    Возвращает кортеж (список TikTokVideo, название звука)
+    """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+    }
+    url = f"https://www.tiktok.com/music/original-sound-{music_id}"
+    async with httpx.AsyncClient(proxies=http_proxy, headers=headers, timeout=15) as client:
+        resp = await client.get(url)
+        text = resp.text
+
+    # парсим минимально через регулярку
+    title_match = re.search(r'<h1.*?>(.*?)</h1>', text)
+    title = title_match.group(1) if title_match else None
+
+    # получаем видео из страницы (здесь простая заглушка, можно через API/Playwright)
+    video_ids = re.findall(r'/video/(\d+)"', text)
+    author = "unknown"
+    items = [TikTokVideo(id=vid, desc="", create_time=0, author=author) for vid in video_ids[:limit]]
+
+    return items, title
 
 
-async def _new_context(p, http_proxy: str | None):
-args = []
-proxy = None
-if http_proxy:
-proxy = {"server": http_proxy}
-browser = await p.chromium.launch(headless=True)
-ctx = await browser.new_context(locale="en-US", proxy=proxy, user_agent=None)
-return browser, ctx
+async def discover_new_sounds_by_hashtag(tag: str, http_proxy: Optional[str] = None, limit: int = 10) -> List[Tuple[str, Optional[str]]]:
+    """
+    Ищет новые звуки по хэштегу
+    Возвращает список кортежей (music_id, title)
+    """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+    }
+    url = f"https://www.tiktok.com/tag/{tag}"
+    async with httpx.AsyncClient(proxies=http_proxy, headers=headers, timeout=15) as client:
+        resp = await client.get(url)
+        text = resp.text
+
+    # простая заглушка: ищем все music_id
+    mids = re.findall(r'/music/original-sound-(\d+)', text)
+    return [(mid, None) for mid in mids[:limit]]
 
 
+# Пример синхронной обертки для вызова без async
+def fetch_music_videos_sync(*args, **kwargs):
+    return asyncio.run(fetch_music_videos(*args, **kwargs))
 
 
-async def _extract_sigi(html: str) -> dict[str, Any]:
-m = SIGI_RE.search(html)
-if not m:
-return {}
-raw = m.group(1)
-try:
-return json.loads(raw)
-except Exception:
-return {}
-
-
-
-
-def _videos_from_sigi(sigi: dict[str, Any]) -> tuple[list[VideoItem], str | None]:
-# try ItemModule first (most reliable)
-items: list[VideoItem] = []
-title = None
-try:
-im = sigi.get("ItemModule") or {}
-for vid, data in im.items():
-items.append(
-VideoItem(
-id=str(vid),
-create_time=int(data.get("createTime") or 0),
-author=str((data.get("author") or "").strip("@")),
-desc=str(data.get("desc") or ""),
-cover=(data.get("video") or {}).get("cover") or None,
-)
-)
-except Exception:
-pass
-
-
-# title of music page if present
-try:
-music_module = (sigi.get("MusicModule") or sigi.get("MusicInfo") or {})
-if isinstance(music_module, dict):
-title = (music_module.get("music") or {}).get("title")
-except Exception:
-pass
-return items, title
-
-
-
-
-async def fetch_music_videos(music_id: str, http_proxy: str | None = None, limit: int = 30) -> tuple[list[VideoItem], str | None]:
-"""Fetch recent videos for a TikTok music (sound) id.
-Strategy
+def discover_new_sounds_by_hashtag_sync(*args, **kwargs):
+    return asyncio.run(discover_new_sounds_by_hashtag(*args, **kwargs))
+  
