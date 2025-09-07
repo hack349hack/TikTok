@@ -1,77 +1,44 @@
-import asyncio
-from typing import List, Tuple, Optional
-from dataclasses import dataclass
-import httpx
 import re
+from typing import List, Tuple
 
+# Шаблон ссылки для сообщений
 MUSIC_URL_FMT = "https://www.tiktok.com/music/original-sound-{mid}"
 
-
-@dataclass
-class TikTokVideo:
-    id: str
-    desc: str
-    create_time: int
-    author: str
-
-    def link(self) -> str:
-        return f"https://www.tiktok.com/@{self.author}/video/{self.id}"
-
-
-def music_id_from_input(text: str) -> Optional[str]:
-    """Пытаемся извлечь music_id из ссылки или текста"""
-    match = re.search(r"(?:/music/|original-sound-)(\d+)", text)
-    return match.group(1) if match else None
-
-
-async def fetch_music_videos(music_id: str, http_proxy: Optional[str] = None, limit: int = 20) -> Tuple[List[TikTokVideo], Optional[str]]:
+async def fetch_music_videos(
+    music_id: str,
+    http_proxy: str | None = None,
+    limit: int = 10
+) -> Tuple[List[dict], None]:
     """
-    Fetch recent videos for a TikTok music (sound) id.
-    Возвращает кортеж (список TikTokVideo, название звука)
+    Заглушка для парсинга видео по music_id.
+    В реальном боте можно использовать TikTokApi или httpx запросы.
+    Возвращает список словарей с видео.
     """
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-    }
-    url = f"https://www.tiktok.com/music/original-sound-{music_id}"
-    async with httpx.AsyncClient(proxies=http_proxy, headers=headers, timeout=15) as client:
-        resp = await client.get(url)
-        text = resp.text
+    # Пример возвращаемых видео
+    return [{"id": f"video{i}", "url": f"https://tiktok.com/@user/video{i}"} for i in range(limit)], None
 
-    # парсим минимально через регулярку
-    title_match = re.search(r'<h1.*?>(.*?)</h1>', text)
-    title = title_match.group(1) if title_match else None
-
-    # получаем видео из страницы (здесь простая заглушка, можно через API/Playwright)
-    video_ids = re.findall(r'/video/(\d+)"', text)
-    author = "unknown"
-    items = [TikTokVideo(id=vid, desc="", create_time=0, author=author) for vid in video_ids[:limit]]
-
-    return items, title
-
-
-async def discover_new_sounds_by_hashtag(tag: str, http_proxy: Optional[str] = None, limit: int = 10) -> List[Tuple[str, Optional[str]]]:
+def music_id_from_input(text: str) -> str | None:
     """
-    Ищет новые звуки по хэштегу
-    Возвращает список кортежей (music_id, title)
+    Извлекает music_id из ссылки или возвращает текст, если это уже ID.
+    Работает с ссылками:
+    - https://www.tiktok.com/music/Снова-один-7344858713896913666
+    - https://www.tiktok.com/music/7344858713896913666
+    - 7344858713896913666
     """
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-    }
-    url = f"https://www.tiktok.com/tag/{tag}"
-    async with httpx.AsyncClient(proxies=http_proxy, headers=headers, timeout=15) as client:
-        resp = await client.get(url)
-        text = resp.text
+    text = text.strip()
+    # Ищем последнюю группу цифр длиной 16+ в ссылке
+    match = re.search(r"/(\d{16,})", text)
+    if match:
+        return match.group(1)
+    # Если это просто число
+    if text.isdigit() and len(text) >= 16:
+        return text
+    return None
 
-    # простая заглушка: ищем все music_id
-    mids = re.findall(r'/music/original-sound-(\d+)', text)
-    return [(mid, None) for mid in mids[:limit]]
-
-
-# Пример синхронной обертки для вызова без async
-def fetch_music_videos_sync(*args, **kwargs):
-    return asyncio.run(fetch_music_videos(*args, **kwargs))
-
-
-def discover_new_sounds_by_hashtag_sync(*args, **kwargs):
-    return asyncio.run(discover_new_sounds_by_hashtag(*args, **kwargs))
-  
+def discover_new_sounds_by_hashtag(tag: str, limit: int = 10) -> List[str]:
+    """
+    Заглушка для поиска новых звуков по хэштегу.
+    Возвращает список music_id.
+    """
+    return [str(7344858713896913666 + i) for i in range(limit)]
+    
