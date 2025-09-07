@@ -1,52 +1,54 @@
-import re
-import aiohttp
+import asyncio
+import httpx
+from datetime import datetime
+from .storage import save_new_video, get_known_video_ids
 
-MUSIC_URL_FMT = "https://www.tiktok.com/music/{slug}-{music_id}"
+BASE_MUSIC_API = "https://www.tiktok.com/api/music/item_list/"
 
-
-def music_id_from_input(text: str) -> str | None:
+async def fetch_videos_by_music(music_id: str, count: int = 30):
     """
-    Извлекает music_id из:
-    - ссылки вида https://www.tiktok.com/music/название-123456789
-    - просто ID (число)
+    Получаем последние видео по music_id.
+    Возвращает список новых видео.
     """
-    # match full music link
-    match = re.search(r"music/[A-Za-z0-9%_-]+-(\d+)", text)
-    if match:
-        return match.group(1)
+    known_ids = get_known_video_ids(music_id)
+    new_videos = []
 
-    # match plain digits
-    match = re.search(r"\b(\d{5,})\b", text)
-    if match:
-        return match.group(1)
+    params = {"musicID": music_id, "count": count}
+    headers = {"User-Agent": "Mozilla/5.0"}
 
-    return None
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.get(BASE_MUSIC_API, params=params, headers=headers)
+        data = resp.json()
+
+    for aweme in data.get("aweme_list", []):
+        vid = aweme["aweme_id"]
+        if vid not in known_ids:
+            new_videos.append({
+                "aweme_id": vid,
+                "desc": aweme.get("desc", ""),
+                "author": aweme.get("author", {}).get("nickname", ""),
+                "create_time": datetime.fromtimestamp(aweme.get("create_time", 0)),
+                "video_url": aweme.get("video", {}).get("play_addr", {}).get("url_list", [None])[0]
+            })
+            save_new_video(music_id, vid)
+    return new_videos
 
 
-async def fetch_music_videos(music_id: str):
+async def monitor_music(bot, music_id: str, chat_id: int, interval: int = 180):
     """
-    Получает список видео по music_id.
-    Возвращает список {url, ts} и последний ts.
+    Фоновый мониторинг новых видео по music_id
+    и отправка в Telegram каждые `interval` секунд.
     """
-    url = f"https://www.tiktok.com/music/original-{music_id}"
-    api = f"https://www.tiktok.com/api/music/item_list/?musicID={music_id}&count=20"
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-    }
-
-    async with aiohttp.ClientSession() as session:
-        async with session.get(api, headers=headers) as resp:
-            if resp.status != 200:
-                raise Exception(f"TikTok API error {resp.status}")
-            data = await resp.json()
-
-    videos = []
-    last_ts = 0
-    for item in data.get("itemList", []):
-        video_url = f"https://www.tiktok.com/@{item['author']['uniqueId']}/video/{item['id']}"
-        ts = int(item["createTime"])
-        videos.append({"url": video_url, "ts": ts})
-        last_ts = max(last_ts, ts)
-
-    return videos, last_ts
+    while True:
+        try:
+            new_videos = await fetch_videos_by_music(music_id)
+            for video in new_videos:
+                text = f"🎵 Новое видео под звук:\n\n{video['desc']}\nАвтор: {video['author']}\nСсылка: https://www.tiktok.com/@{video['author']}/video/{video['aweme_id']}"
+                if video["video_url"]:
+                    await bot.send_video(chat_id, video["video_url"], caption=text)
+                else:
+                    await bot.send_message(chat_id, text)
+        except Exception as e:
+            print("Ошибка мониторинга музыки:", e)
+        await asyncio.sleep(interval)
+        
